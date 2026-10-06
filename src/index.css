@@ -1,0 +1,74 @@
+@import "tailwindcss";
+
+@layer base {
+  html,
+  body,
+  #root {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+    margin: 0;
+    padding: 0;
+  }
+  body {
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background-color: #FAF8FE;
+    min-height: 100vh;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Outfit', 'Plus Jakarta Sans', sans-serif;
+  }
+}
+
+:root {
+  --popcarty-purple: #7152e8;
+  --popcarty-purple-dark: #5c3cd6;
+  --popcarty-sand: #d49b60;
+  --popcarty-sand-light: #fbf6ef;
+  --popcarty-dark: #1e1338;
+}
+
+.bg-popcarty-purple {
+  background-color: #7152e8;
+}
+.hover\:bg-popcarty-purple-dark:hover {
+  background-color: #5c3cd6;
+}
+.text-popcarty-purple {
+  color: #7152e8;
+}
+.bg-popcarty-sand {
+  background-color: #d49b60;
+}
+.text-popcarty-sand {
+  color: #d49b60;
+}
+.border-popcarty-purple {
+  border-color: #7152e8;
+}
+
+/* Custom scrollbar hiding */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Subtle custom scrollbar for modals and tables */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}

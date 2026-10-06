@@ -1,0 +1,6 @@
+{
+  "name": "AuraCart - Modern E-Commerce Platform",
+  "description": "A complete, production-ready e-commerce platform featuring trending electronics, smart gadgets, real-time cart, seamless checkout, user portal, and comprehensive admin dashboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

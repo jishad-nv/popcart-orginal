@@ -22,6 +22,9 @@ import {
   INITIAL_REVIEWS,
 } from '../data/mockData';
 import { AUTH_TOKEN_KEY, clearStoredAuthToken } from '../services/productImporter';
+import { auth, db } from '../services/firebase';
+import { onAuthStateChanged, signInWithEmailAndPassword, signOut, createUserWithEmailAndPassword } from 'firebase/auth';
+import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 
 export type PageView =
   | 'home'
@@ -339,9 +342,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   );
   const [reviews, setReviews] = useState<Review[]>(() => loadStorage(STORAGE_KEYS.REVIEWS, INITIAL_REVIEWS));
 
-  // Verify backend session on mount and load real catalog from backend database
+  // Firebase Auth and Firestore Sync on Mount
   useEffect(() => {
-    // 1. Check direct URL protection on initial load
     if (typeof window !== 'undefined') {
       const target = pathToPage(window.location.pathname);
       if (target === 'profile' && !currentUserRef.current) {
@@ -351,130 +353,58 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     }
 
-    // 2. Verify active session token with backend (/api/auth/me)
-    const verifyBackendSession = async () => {
-      const token = localStorage.getItem(AUTH_TOKEN_KEY);
-      if (!token || token === 'null' || token === 'undefined') {
-        if (currentUserRef.current) {
-          setCurrentUser(null);
-          localStorage.removeItem(STORAGE_KEYS.USER);
-        }
-        return;
+    const unsubAuth = onAuthStateChanged(auth, (firebaseUser) => {
+      if (firebaseUser) {
+        const userEmail = (firebaseUser.email || '').toLowerCase();
+        const isAdminUser = userEmail === 'popcarty7@gmail.com' || userEmail === 'admin@popcarty.com';
+        const user: User = {
+          id: firebaseUser.uid,
+          name: firebaseUser.displayName || (isAdminUser ? 'Store Administrator' : 'Popcarty Customer'),
+          email: userEmail,
+          phone: firebaseUser.phoneNumber || '',
+          role: isAdminUser ? 'admin' : 'customer',
+          memberSince: 'October 2026',
+          avatar: isAdminUser
+            ? 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=120&q=80'
+            : 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=120&q=80',
+        };
+        currentUserRef.current = user;
+        setCurrentUser(user);
+        safeSetStorage(STORAGE_KEYS.USER, user);
+      } else {
+        currentUserRef.current = null;
+        setCurrentUser(null);
+        localStorage.removeItem(STORAGE_KEYS.USER);
       }
+    });
 
+    const loadFirestoreProducts = async () => {
       try {
-        const res = await fetch('/api/auth/me', {
-          headers: { Authorization: `Bearer ${token}` },
-          credentials: 'include',
-          cache: 'no-store',
-        });
-
-        if (!res.ok) {
-          // Session invalid/expired/logged-out on server -> purge client auth state
-          clearStoredAuthToken();
-          localStorage.removeItem(STORAGE_KEYS.USER);
-          localStorage.removeItem(STORAGE_KEYS.ADDRESSES);
-          setCurrentUser(null);
-          setAddresses([]);
-          if (isProtectedPage(pathToPage(window.location.pathname))) {
-            window.history.replaceState({ page: 'home' }, '', '/');
-            setCurrentPage('home');
+        const querySnapshot = await getDocs(collection(db, 'products'));
+        if (!querySnapshot.empty) {
+          const prods: Product[] = [];
+          querySnapshot.forEach((docSnap) => {
+            prods.push(docSnap.data() as Product);
+          });
+          if (prods.length > 0) {
+            setProducts(prods);
           }
         } else {
-          const data = await res.json();
-          if (data.user) {
-            const refreshedUser: User = {
-              id: data.user.id,
-              name: data.user.name,
-              email: data.user.email,
-              phone: data.user.phone || currentUserRef.current?.phone || '',
-              role: data.user.role === 'admin' ? 'admin' : 'customer',
-              memberSince: data.user.memberSince || currentUserRef.current?.memberSince || 'October 2026',
-            };
-            currentUserRef.current = refreshedUser;
-            setCurrentUser(refreshedUser);
-            safeSetStorage(STORAGE_KEYS.USER, refreshedUser);
+          // Auto-seed initial products into Firestore if empty
+          for (const p of INITIAL_PRODUCTS) {
+            try {
+              await setDoc(doc(db, 'products', p.id), p);
+            } catch {}
           }
+          setProducts(INITIAL_PRODUCTS);
         }
       } catch {
-        // Keep current state on transient offline error
+        // Fallback to local products
       }
     };
 
-    // 3. Sync real products, coupons, settings, and orders from backend database
-    const syncBackendData = async () => {
-      try {
-        const res = await fetch('/api/products');
-        if (res.ok) {
-          const data = await res.json();
-          if (Array.isArray(data.products) && data.products.length > 0) {
-            setProducts(data.products);
-          }
-        }
-      } catch {
-        // Fallback to local state
-      }
-
-      try {
-        const couponRes = await fetch('/api/coupons');
-        if (couponRes.ok) {
-          const couponData = await couponRes.json();
-          if (Array.isArray(couponData.coupons) && couponData.coupons.length > 0) {
-            setCoupons(couponData.coupons);
-          }
-        }
-      } catch {
-        // Fallback to local state
-      }
-
-      try {
-        const settingsRes = await fetch('/api/settings');
-        if (settingsRes.ok) {
-          const settingsData = await settingsRes.json();
-          if (settingsData.settings) {
-            setSettings(settingsData.settings);
-          }
-        }
-      } catch {
-        // Fallback to local state
-      }
-
-      const token = localStorage.getItem(AUTH_TOKEN_KEY);
-      if (token && token !== 'null' && token !== 'undefined') {
-        try {
-          const ordersRes = await fetch('/api/orders', {
-            headers: { Authorization: `Bearer ${token}` },
-            credentials: 'include',
-          });
-          if (ordersRes.ok) {
-            const ordersData = await ordersRes.json();
-            if (Array.isArray(ordersData.orders)) {
-              setOrders(ordersData.orders);
-            }
-          }
-        } catch {
-          // Fallback to local state
-        }
-
-        try {
-          const addrRes = await fetch('/api/addresses', {
-            headers: { Authorization: `Bearer ${token}` },
-            credentials: 'include',
-          });
-          if (addrRes.ok) {
-            const addrData = await addrRes.json();
-            if (Array.isArray(addrData.addresses)) {
-              setAddresses(addrData.addresses);
-            }
-          }
-        } catch {
-          // Fallback to local state
-        }
-      }
-    };
-
-    verifyBackendSession();
-    syncBackendData();
+    loadFirestoreProducts();
+    return () => unsubAuth();
   }, []);
 
   // Browser Back / Forward (popstate) route protection
@@ -629,8 +559,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return `₹${amount.toLocaleString('en-IN')}`;
   };
 
-  // Product management
-  const addProduct = (newProd: Omit<Product, 'id' | 'slug'>) => {
+  // Product management with Firestore
+  const addProduct = async (newProd: Omit<Product, 'id' | 'slug'>) => {
     const id = `prod-${Date.now()}`;
     const slug = newProd.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
     const primaryImage =
@@ -645,49 +575,38 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
     setProducts((prev) => [fullProduct, ...prev]);
 
-    const token = localStorage.getItem(AUTH_TOKEN_KEY);
-    if (token) {
-      fetch('/api/products', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        credentials: 'include',
-        body: JSON.stringify(fullProduct),
-      }).catch(() => {});
+    try {
+      await setDoc(doc(db, 'products', id), fullProduct);
+    } catch (e) {
+      console.error(e);
     }
 
     addToast('Product Added', `${fullProduct.name} has been added to catalog.`, 'success');
   };
 
-  const updateProduct = (id: string, updates: Partial<Product>) => {
+  const updateProduct = async (id: string, updates: Partial<Product>) => {
     const normalizedUpdates = updates.images?.length
       ? { ...updates, images: [updates.images[0]] }
       : updates;
 
     setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, ...normalizedUpdates } : p)));
 
-    const token = localStorage.getItem(AUTH_TOKEN_KEY);
-    if (token) {
-      fetch(`/api/products/${encodeURIComponent(id)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        credentials: 'include',
-        body: JSON.stringify(normalizedUpdates),
-      }).catch(() => {});
+    try {
+      await updateDoc(doc(db, 'products', id), normalizedUpdates);
+    } catch (e) {
+      console.error(e);
     }
 
     addToast('Product Updated', 'Changes saved successfully.', 'success');
   };
 
-  const deleteProduct = (id: string) => {
+  const deleteProduct = async (id: string) => {
     setProducts((prev) => prev.filter((p) => p.id !== id));
 
-    const token = localStorage.getItem(AUTH_TOKEN_KEY);
-    if (token) {
-      fetch(`/api/products/${encodeURIComponent(id)}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-        credentials: 'include',
-      }).catch(() => {});
+    try {
+      await deleteDoc(doc(db, 'products', id));
+    } catch (e) {
+      console.error(e);
     }
 
     addToast('Product Deleted', 'Item removed from store.', 'info');
@@ -1074,7 +993,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     addToast('Coupon Deleted', 'Coupon removed from store.', 'info');
   };
 
-  // Auth & Profile (Backed by Real Server Session, Password Hashing & Token Revocation)
+  // Auth & Profile (Backed by Firebase Authentication)
   const login = async (
     email: string,
     _role: 'customer' | 'admin' = 'customer',
@@ -1087,85 +1006,30 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         return false;
       }
 
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          email: cleanEmail,
-          password,
-        }),
-      });
-
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        addToast('Sign In Failed', errData.message || 'Invalid email or password.', 'error');
-        return false;
-      }
-
-      const data = await res.json();
-      const verifiedRole: 'customer' | 'admin' = data.user?.role === 'admin' ? 'admin' : 'customer';
+      const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
+      const userEmail = (cred.user.email || cleanEmail).toLowerCase();
+      const isAdminUser = userEmail === 'popcarty7@gmail.com' || userEmail === 'admin@popcarty.com';
 
       const user: User = {
-        id: data.user?.id || (verifiedRole === 'admin' ? 'usr-admin' : `usr-${Date.now()}`),
-        name:
-          data.user?.name ||
-          (verifiedRole === 'admin' ? 'Store Administrator' : 'Popcarty User'),
-        email: data.user?.email || cleanEmail,
-        phone: data.user?.phone || '+91 98765 43210',
-        role: verifiedRole,
-        memberSince: data.user?.memberSince || 'October 2026',
-        avatar:
-          verifiedRole === 'admin'
-            ? 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=120&q=80'
-            : 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=120&q=80',
+        id: cred.user.uid,
+        name: cred.user.displayName || (isAdminUser ? 'Store Administrator' : 'Popcarty User'),
+        email: userEmail,
+        phone: cred.user.phoneNumber || '+91 98765 43210',
+        role: isAdminUser ? 'admin' : 'customer',
+        memberSince: 'October 2026',
+        avatar: isAdminUser
+          ? 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=120&q=80'
+          : 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=120&q=80',
       };
-
-      if (data.token) {
-        try {
-          localStorage.setItem(AUTH_TOKEN_KEY, data.token);
-        } catch {
-          // ignore storage error
-        }
-      }
-
-      try {
-        localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
-      } catch {
-        // ignore storage error
-      }
 
       currentUserRef.current = user;
       setCurrentUser(user);
-
-      // Sync user orders and addresses from backend
-      if (data.token) {
-        fetch('/api/orders', {
-          headers: { Authorization: `Bearer ${data.token}` },
-          credentials: 'include',
-        })
-          .then((r) => (r.ok ? r.json() : null))
-          .then((d) => {
-            if (d && Array.isArray(d.orders)) setOrders(d.orders);
-          })
-          .catch(() => {});
-
-        fetch('/api/addresses', {
-          headers: { Authorization: `Bearer ${data.token}` },
-          credentials: 'include',
-        })
-          .then((r) => (r.ok ? r.json() : null))
-          .then((d) => {
-            if (d && Array.isArray(d.addresses)) setAddresses(d.addresses);
-          })
-          .catch(() => {});
-      }
-
+      safeSetStorage(STORAGE_KEYS.USER, user);
       setAuthModalOpen(false);
       addToast('Signed In', `Welcome back, ${user.name}!`, 'success');
       return true;
     } catch (err: any) {
-      addToast('Sign In Error', err?.message || 'Unable to connect to authentication server.', 'error');
+      addToast('Sign In Failed', err?.message || 'Invalid email or password.', 'error');
       return false;
     }
   };
@@ -1178,50 +1042,23 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   ): Promise<boolean> => {
     try {
       const cleanEmail = email.trim().toLowerCase();
-      const res = await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          name: name.trim(),
-          email: cleanEmail,
-          phone: phone.trim(),
-          password: password || '',
-        }),
-      });
-
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        addToast('Registration Failed', errData.message || 'Unable to create account.', 'error');
+      if (!password || password.length < 6) {
+        addToast('Registration Failed', 'Password must be at least 6 characters long.', 'error');
         return false;
       }
-
-      const data = await res.json();
+      const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
       const user: User = {
-        id: data.user?.id || `usr-${Date.now()}`,
-        name: data.user?.name || name.trim() || 'Popcarty User',
-        email: data.user?.email || cleanEmail,
-        phone: data.user?.phone || phone.trim(),
+        id: cred.user.uid,
+        name: name.trim() || 'Popcarty User',
+        email: cleanEmail,
+        phone: phone.trim(),
         role: 'customer',
-        memberSince: data.user?.memberSince || 'October 2026',
+        memberSince: 'October 2026',
       };
-
-      if (data.token) {
-        try {
-          localStorage.setItem(AUTH_TOKEN_KEY, data.token);
-        } catch {
-          // ignore storage error
-        }
-      }
-
-      try {
-        localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
-      } catch {
-        // ignore storage error
-      }
 
       currentUserRef.current = user;
       setCurrentUser(user);
+      safeSetStorage(STORAGE_KEYS.USER, user);
       setAddresses([]);
       setAuthModalOpen(false);
       addToast('Account Created', 'Welcome to Popcarty! Your account is ready.', 'success');
@@ -1237,45 +1074,23 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setIsLoggingOut(true);
 
     try {
-      const token = localStorage.getItem(AUTH_TOKEN_KEY);
-      const res = await fetch('/api/auth/logout', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        credentials: 'include',
-      });
-
-      if (!res.ok) {
-        setIsLoggingOut(false);
-        addToast('Sign Out Failed', 'Could not terminate session on server. Please try again.', 'error');
-        return false;
-      }
-
-      // 1. Clear all tokens, localStorage & sessionStorage auth state
+      await signOut(auth);
       clearStoredAuthToken();
       try {
         localStorage.removeItem(STORAGE_KEYS.USER);
         localStorage.removeItem(STORAGE_KEYS.ADDRESSES);
         sessionStorage.clear();
-      } catch {
-        // ignore storage error
-      }
+      } catch {}
 
-      // 2. Clear in-memory authenticated user state & private caches
       currentUserRef.current = null;
       setCurrentUser(null);
       setAddresses([]);
       setAppliedCoupon(null);
 
-      // 3. Redirect to public home page & replace browser history entry so Back cannot reopen protected pages
       setCurrentPage('home');
       try {
         window.history.replaceState({ page: 'home', signedOut: true }, '', '/');
-      } catch {
-        // ignore history error
-      }
+      } catch {}
       window.scrollTo({ top: 0, behavior: 'smooth' });
 
       addToast('Signed Out', 'You have been logged out safely.', 'info');
@@ -1283,7 +1098,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return true;
     } catch {
       setIsLoggingOut(false);
-      addToast('Sign Out Failed', 'Network error while signing out. Please try again.', 'error');
+      addToast('Sign Out Failed', 'Could not sign out. Please try again.', 'error');
       return false;
     }
   };

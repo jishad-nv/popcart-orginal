@@ -59,7 +59,7 @@ const ensureDataDir = () => {
 
 const getDefaultSeed = (): DatabaseSchema => {
   return {
-    products: FALLBACK_PRODUCTS,
+    products: FALLBACK_PRODUCTS as any,
     orders: [],
     coupons: [
       {

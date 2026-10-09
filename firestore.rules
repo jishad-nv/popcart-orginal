@@ -1,0 +1,50 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner() {
+      return isSignedIn() && (
+        request.auth.token.email == 'popcarty7@gmail.com' ||
+        request.auth.token.email == 'admin@popcarty.com' ||
+        request.auth.token.email_verified == true
+      );
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    match /products/{productId} {
+      allow read: if true;
+      allow write: if isOwner();
+    }
+
+    match /orders/{orderId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    match /categories/{categoryId} {
+      allow read: if true;
+      allow write: if isOwner();
+    }
+
+    match /coupons/{couponId} {
+      allow read: if true;
+      allow write: if isOwner();
+    }
+
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if isOwner();
+    }
+
+    match /reviews/{reviewId} {
+      allow read: if true;
+      allow write: if isSignedIn();
+    }
+  }
+}

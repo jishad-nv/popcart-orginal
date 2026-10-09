@@ -38,7 +38,7 @@ export const ProductImporterPanel: React.FC = () => {
   const { importProducts, categories, formatPrice, addToast } = useStore();
 
   // Source configuration
-  const [sourceUrl, setSourceUrl] = useState('https://dropplier.in/collections/under-499?page=2');
+  const [sourceUrl, setSourceUrl] = useState('https://dropplier.in/collections/all');
   const [selectedTargetCategory, setSelectedTargetCategory] = useState<string>('auto');
   const [markupType, setMarkupType] = useState<'percent' | 'fixed'>('percent');
   const [markupValue, setMarkupValue] = useState<number>(35);
@@ -94,7 +94,7 @@ export const ProductImporterPanel: React.FC = () => {
       setTotalPagesFound(result.totalPagesScanned || 1);
 
       // If target category is explicitly set, override
-      const processed = result.products.map((p) => {
+      const processed = result.products.map((p: any) => {
         if (selectedTargetCategory !== 'auto') {
           const catObj = categories.find((c) => c.id === selectedTargetCategory);
           return {
@@ -146,7 +146,7 @@ export const ProductImporterPanel: React.FC = () => {
         }
       );
 
-      const productsToCommit = scanResult.products.map((p) => {
+      const productsToCommit = scanResult.products.map((p: any) => {
         if (selectedTargetCategory !== 'auto') {
           const catObj = categories.find((c) => c.id === selectedTargetCategory);
           return {
@@ -173,7 +173,7 @@ export const ProductImporterPanel: React.FC = () => {
         }
       );
 
-      const validStoreProducts = productsToCommit.map((p) => convertToStoreProduct(p));
+      const validStoreProducts = productsToCommit.map((p: any) => convertToStoreProduct(p));
       importProducts(validStoreProducts);
 
       setIsImporting(false);
@@ -370,9 +370,9 @@ export const ProductImporterPanel: React.FC = () => {
                 className="w-full pl-3.5 pr-10 py-2.5 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500 font-mono text-slate-700 transition-all"
               />
               <button
-                onClick={() => setSourceUrl('https://dropplier.in/collections/under-499?page=2')}
+                onClick={() => setSourceUrl('https://dropplier.in/collections/all')}
                 className="absolute right-2.5 top-2.5 text-[10px] font-bold text-violet-600 hover:text-violet-800 bg-violet-50 hover:bg-violet-100 px-2 py-0.5 rounded cursor-pointer transition-colors"
-                title="Use Default Dropplier Under ₹499"
+                title="Use Default Dropplier All Collection"
               >
                 Reset Default
               </button>

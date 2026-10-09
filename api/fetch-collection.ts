@@ -64,13 +64,19 @@ export default async function handler(req: any, res: any) {
     return res.status(401).json({ error: 'Unauthorized', message: 'Token verification failed.' });
   }
 
-  let targetPath = parsedUrl.pathname;
-  if (!targetPath.endsWith('.json')) {
-    if (targetPath.endsWith('/')) targetPath = targetPath.slice(0, -1);
-    targetPath = `${targetPath}.json`;
+  const segments = parsedUrl.pathname.split('/').filter(Boolean);
+  let handle = '';
+  const collectionsIdx = segments.indexOf('collections');
+  if (collectionsIdx !== -1 && segments[collectionsIdx + 1]) {
+    handle = segments[collectionsIdx + 1].replace(/\.json$/i, '');
+  } else if (segments.length > 0) {
+    handle = segments[segments.length - 1].replace(/\.json$/i, '');
+  }
+  if (!handle) {
+    handle = 'all';
   }
 
-  const shopifyApiUrl = `https://${parsedUrl.hostname}${targetPath}?page=${page}&limit=250`;
+  const shopifyApiUrl = `https://dropplier.in/collections/${handle}/products.json?limit=250&page=${page}`;
 
   try {
     const shopifyRes = await fetch(shopifyApiUrl, {
@@ -80,19 +86,34 @@ export default async function handler(req: any, res: any) {
       },
     });
 
+    const responseText = await shopifyRes.text();
+    let shopifyData: any = {};
+    try {
+      shopifyData = JSON.parse(responseText);
+    } catch {
+      shopifyData = { rawText: responseText };
+    }
+
     if (!shopifyRes.ok) {
       return res.status(shopifyRes.status).json({
         error: 'Upstream Error',
+        status: shopifyRes.status,
+        url: shopifyApiUrl,
         message: `Failed to fetch from supplier: ${shopifyRes.statusText}`,
+        bodySnippet: responseText.substring(0, 200),
+        keys: Object.keys(shopifyData),
       });
     }
 
-    const shopifyData = await shopifyRes.json();
+    const products = shopifyData.products || shopifyData.data?.products || [];
+
     return res.status(200).json({
       success: true,
       page,
-      data: shopifyData,
-      sourceOrigin: parsedUrl.hostname,
+      products,
+      count: products.length,
+      keys: Object.keys(shopifyData),
+      bodySnippet: responseText.substring(0, 200),
     });
   } catch (err: any) {
     console.error('Shopify fetch error:', err);

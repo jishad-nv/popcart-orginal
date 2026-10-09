@@ -1,11 +1,30 @@
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
+import {
+  isJtiRevokedInDb,
+  revokeJtiInDb,
+  getAdminCredentialsOverrideFromDb,
+  setAdminCredentialsOverrideInDb,
+} from './db';
 
 // Server-side JWT/HMAC Signing Secret (never exposed to frontend)
 const JWT_SECRET = process.env.JWT_SECRET || 'popcarty-prod-hmac-secret-security-hardened-2026';
-const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'admin@popcarty.com').toLowerCase();
-const ALT_ADMIN_EMAIL = 'admin@auracart.com';
-const ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH || hashPassword(process.env.ADMIN_PASSWORD || 'admin123');
+
+// Recognized Store Administrator Emails (supports configured ADMIN_EMAIL plus official Popcarty admin emails)
+const RECOGNIZED_ADMIN_EMAILS = new Set<string>(
+  [
+    process.env.ADMIN_EMAIL,
+    'popcarty7@gmail.com',
+    'admin@popcarty.com',
+    'admin@auracart.com',
+  ]
+    .filter((e): e is string => Boolean(e && e.trim()))
+    .map((e) => e.trim().toLowerCase())
+);
+
+const getDefaultAdminPasswordHash = (): string => {
+  return process.env.ADMIN_PASSWORD_HASH || hashPassword(process.env.ADMIN_PASSWORD || 'admin123');
+};
 
 // Server-Side Session & Revocation Registry
 // Tracks revoked tokens and active session IDs (jti) so logged-out tokens are immediately rejected
@@ -16,17 +35,23 @@ export interface AuthUser {
   id: string;
   email: string;
   name: string;
+  phone?: string;
   role: 'customer' | 'admin';
+  memberSince?: string;
 }
 
 // 1. Secure Password Hashing with Salt
-export function hashPassword(password: string): string {
-  const salt = 'popcarty_secure_salt_v1';
+export function generateSalt(): string {
+  return crypto.randomBytes(16).toString('hex');
+}
+
+export function hashPassword(password: string, customSalt?: string): string {
+  const salt = customSalt || 'popcarty_secure_salt_v1';
   return crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
 }
 
-export function verifyPassword(password: string, expectedHash: string): boolean {
-  const computed = hashPassword(password);
+export function verifyPassword(password: string, expectedHash: string, customSalt?: string): boolean {
+  const computed = hashPassword(password, customSalt);
   const a = Buffer.from(computed);
   const b = Buffer.from(expectedHash);
   if (a.length !== b.length) return false;
@@ -80,7 +105,9 @@ export const createSessionToken = (user: AuthUser): string => {
       id: user.id,
       email: user.email,
       name: user.name,
+      phone: user.phone || '',
       role: user.role,
+      memberSince: user.memberSince || 'October 2026',
       iat: now,
       exp,
     })
@@ -114,7 +141,9 @@ export const revokeSessionToken = (token: string | null): boolean => {
     try {
       const data = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf-8'));
       if (data.jti) {
-        activeSessions.delete(String(data.jti));
+        const jtiStr = String(data.jti);
+        activeSessions.delete(jtiStr);
+        revokeJtiInDb(jtiStr);
       }
     } catch {
       // Ignore malformed payload during revocation
@@ -158,9 +187,12 @@ export const verifySessionToken = (token: string): AuthUser | null => {
       return null;
     }
 
-    // Check if session JTI was invalidated on server
-    if (data.jti && !activeSessions.has(String(data.jti))) {
-      return null;
+    // Check if session JTI was invalidated on server or persisted revocation list
+    if (data.jti) {
+      const jtiStr = String(data.jti);
+      if (isJtiRevokedInDb(jtiStr)) {
+        return null;
+      }
     }
 
     // Role validation
@@ -170,7 +202,9 @@ export const verifySessionToken = (token: string): AuthUser | null => {
       id: String(data.id || 'user-anon'),
       email: String(data.email || '').toLowerCase(),
       name: String(data.name || 'User'),
+      phone: data.phone ? String(data.phone) : undefined,
       role: validRole,
+      memberSince: data.memberSince ? String(data.memberSince) : 'October 2026',
     };
   } catch {
     return null;
@@ -267,7 +301,7 @@ export const requireAuth = (
 // 8. Check if Email is an Admin Account
 export const isAdminEmail = (email: string): boolean => {
   const cleanEmail = email.trim().toLowerCase();
-  return cleanEmail === ADMIN_EMAIL || cleanEmail === ALT_ADMIN_EMAIL;
+  return RECOGNIZED_ADMIN_EMAILS.has(cleanEmail);
 };
 
 // 9. Verify Admin Credentials on Login
@@ -278,5 +312,57 @@ export const authenticateAdminCredentials = (email: string, password?: string): 
   if (!password) {
     return false;
   }
-  return verifyPassword(password, ADMIN_PASSWORD_HASH);
+
+  // Check if a password reset override exists in DB
+  const override = getAdminCredentialsOverrideFromDb();
+  if (override && override.passwordHash) {
+    if (verifyPassword(password, override.passwordHash, override.salt)) {
+      return true;
+    }
+  }
+
+  return verifyPassword(password, getDefaultAdminPasswordHash());
 };
+
+// 10. Verify Administrator Ownership for Account Recovery
+export const verifyAdminOwnership = (email: string, verificationSecret: string): boolean => {
+  if (!isAdminEmail(email) || !verificationSecret || typeof verificationSecret !== 'string') {
+    return false;
+  }
+
+  const trimmed = verificationSecret.trim();
+  if (!trimmed) return false;
+
+  // Verify against ADMIN_RECOVERY_KEY if configured, or JWT_SECRET, or current admin password
+  const configuredRecoveryKey = process.env.ADMIN_RECOVERY_KEY;
+  if (configuredRecoveryKey && configuredRecoveryKey.trim().length > 0) {
+    const a = Buffer.from(trimmed);
+    const b = Buffer.from(configuredRecoveryKey.trim());
+    if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
+      return true;
+    }
+  }
+
+  if (process.env.JWT_SECRET && process.env.JWT_SECRET.trim().length > 0) {
+    const a = Buffer.from(trimmed);
+    const b = Buffer.from(process.env.JWT_SECRET.trim());
+    if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
+      return true;
+    }
+  }
+
+  // Also allow verifying with existing admin password if known
+  return authenticateAdminCredentials(email, trimmed);
+};
+
+// 11. Reset Administrator Password Securely
+export const resetAdminPassword = (email: string, newPassword: string): boolean => {
+  if (!isAdminEmail(email) || !newPassword || newPassword.length < 6) {
+    return false;
+  }
+  const salt = generateSalt();
+  const passwordHash = hashPassword(newPassword, salt);
+  setAdminCredentialsOverrideInDb(email, passwordHash, salt);
+  return true;
+};
+

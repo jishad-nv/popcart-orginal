@@ -64,6 +64,7 @@ export const AdminDashboard: React.FC = () => {
     login,
     logout,
     isLoggingOut,
+    setAuthModalOpen,
     addToast,
   } = useStore();
 
@@ -457,10 +458,10 @@ export const AdminDashboard: React.FC = () => {
         </div>
         <div className="flex flex-col gap-2.5 pt-2">
           <button
-            onClick={() => login('admin@popcarty.com', 'admin')}
+            onClick={() => setAuthModalOpen(true)}
             className="w-full py-2.5 bg-violet-600 hover:bg-violet-700 text-white font-bold text-xs rounded-xl shadow-md shadow-violet-500/20 transition-all cursor-pointer"
           >
-            Authenticate as Administrator
+            Sign In as Administrator
           </button>
           <button
             onClick={() => navigateTo('home')}

@@ -8,6 +8,9 @@ import {
   extractRequestToken,
   isAdminEmail,
   authenticateAdminCredentials,
+  hashPassword,
+  verifyPassword,
+  generateSalt,
   AuthenticatedRequest,
   AuthUser,
 } from './auth';
@@ -28,6 +31,13 @@ import {
   deleteCouponFromDb,
   getStoreSettingsFromDb,
   updateStoreSettingsInDb,
+  getUserByEmailFromDb,
+  getUserByIdFromDb,
+  createUserInDb,
+  updateUserProfileInDb,
+  getUserAddressesFromDb,
+  saveUserAddressesInDb,
+  StoredUserRecord,
 } from './db';
 import {
   fetchSupplierCollectionPage,
@@ -55,56 +65,229 @@ apiRouter.use(generalApiRateLimiter);
 // 1. AUTHENTICATION ROUTES (PHASE 3 & 4 HARDENING)
 // ==========================================
 
-apiRouter.post('/auth/login', authRateLimiter, (req: Request, res: Response): void => {
-  const { email, password, name } = req.body;
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-  if (!email || typeof email !== 'string' || !email.includes('@')) {
-    res.status(400).json({ error: 'Validation Error', message: 'A valid email address is required.' });
-    return;
-  }
+const isValidMobileNumber = (phone: string): boolean => {
+  const digits = phone.replace(/\D/g, '');
+  return digits.length >= 10 && digits.length <= 15;
+};
 
-  const cleanEmail = email.trim().toLowerCase();
+apiRouter.post('/auth/register', authRateLimiter, (req: Request, res: Response): void => {
+  try {
+    const { name, email, phone, password } = req.body || {};
 
-  // SERVER-SIDE ROLE VERIFICATION: Never trust client-sent role!
-  let assignedRole: 'admin' | 'customer' = 'customer';
-  let userName = typeof name === 'string' && name.trim() ? name.trim().slice(0, 80) : 'Popcarty User';
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      res.status(400).json({ error: 'Validation Error', message: 'Full name is required.' });
+      return;
+    }
 
-  if (isAdminEmail(cleanEmail)) {
-    if (!authenticateAdminCredentials(cleanEmail, password)) {
-      res.status(401).json({
-        error: 'Unauthorized',
-        message: 'Invalid administrator email or password.',
+    if (!email || typeof email !== 'string' || !EMAIL_REGEX.test(email.trim())) {
+      res.status(400).json({ error: 'Validation Error', message: 'Please enter a valid email address.' });
+      return;
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+
+    if (isAdminEmail(cleanEmail)) {
+      res.status(409).json({
+        error: 'Duplicate Account',
+        message: 'An account with this email address already exists. Please sign in instead.',
       });
       return;
     }
-    assignedRole = 'admin';
-    userName = 'Store Administrator';
+
+    if (!phone || typeof phone !== 'string' || !isValidMobileNumber(phone.trim())) {
+      res.status(400).json({
+        error: 'Validation Error',
+        message: 'Please enter a valid 10-digit mobile number.',
+      });
+      return;
+    }
+
+    if (!password || typeof password !== 'string' || password.length < 6) {
+      res.status(400).json({
+        error: 'Validation Error',
+        message: 'Password must be at least 6 characters long.',
+      });
+      return;
+    }
+
+    const existing = getUserByEmailFromDb(cleanEmail);
+    if (existing) {
+      res.status(409).json({
+        error: 'Duplicate Account',
+        message: 'An account with this email address already exists. Please sign in instead.',
+      });
+      return;
+    }
+
+    const salt = generateSalt();
+    const passwordHash = hashPassword(password, salt);
+    const nowIso = new Date().toISOString();
+    const memberSince = new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+
+    const newUserRecord: StoredUserRecord = {
+      id: `usr-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      name: name.trim().slice(0, 80),
+      email: cleanEmail,
+      phone: phone.trim().slice(0, 25),
+      passwordHash,
+      salt,
+      role: 'customer',
+      memberSince,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    const saved = createUserInDb(newUserRecord);
+
+    const authUser: AuthUser = {
+      id: saved.id,
+      email: saved.email,
+      name: saved.name,
+      phone: saved.phone,
+      role: saved.role,
+      memberSince: saved.memberSince,
+    };
+
+    const token = createSessionToken(authUser);
+    const isProd = process.env.NODE_ENV === 'production';
+
+    res.cookie('popcarty_session', token, {
+      httpOnly: true,
+      secure: isProd,
+      sameSite: 'lax',
+      path: '/',
+      maxAge: 24 * 60 * 60 * 1000,
+    });
+
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(201).json({
+      success: true,
+      token,
+      user: authUser,
+    });
+  } catch (err: any) {
+    if (err?.message === 'DUPLICATE_EMAIL') {
+      res.status(409).json({
+        error: 'Duplicate Account',
+        message: 'An account with this email address already exists. Please sign in instead.',
+      });
+      return;
+    }
+    res.status(500).json({
+      error: 'Registration Error',
+      message: 'An unexpected error occurred while creating your account.',
+    });
   }
+});
 
-  const user: AuthUser = {
-    id: assignedRole === 'admin' ? 'usr-admin' : `usr-${cleanEmail.replace(/[^a-z0-9]/g, '')}`,
-    email: cleanEmail,
-    name: userName,
-    role: assignedRole,
-  };
+apiRouter.post('/auth/login', authRateLimiter, (req: Request, res: Response): void => {
+  try {
+    const { email, password } = req.body || {};
 
-  const token = createSessionToken(user);
-  const isProd = process.env.NODE_ENV === 'production';
+    if (!email || typeof email !== 'string' || !EMAIL_REGEX.test(email.trim())) {
+      res.status(400).json({ error: 'Validation Error', message: 'Please enter a valid email address.' });
+      return;
+    }
 
-  res.cookie('popcarty_session', token, {
-    httpOnly: true,
-    secure: isProd,
-    sameSite: 'lax',
-    path: '/',
-    maxAge: 24 * 60 * 60 * 1000,
-  });
+    if (!password || typeof password !== 'string') {
+      res.status(400).json({ error: 'Validation Error', message: 'Password is required to sign in.' });
+      return;
+    }
 
-  res.setHeader('Cache-Control', 'no-store');
-  res.json({
-    success: true,
-    token,
-    user,
-  });
+    const cleanEmail = email.trim().toLowerCase();
+
+    // 1. Check Administrator Authentication
+    if (isAdminEmail(cleanEmail)) {
+      if (!authenticateAdminCredentials(cleanEmail, password)) {
+        res.status(401).json({
+          error: 'Unauthorized',
+          message: 'Invalid administrator email or password.',
+        });
+        return;
+      }
+
+      const adminUser: AuthUser = {
+        id: 'usr-admin',
+        email: cleanEmail,
+        name: 'Store Administrator',
+        phone: '+91 98765 43210',
+        role: 'admin',
+        memberSince: 'October 2026',
+      };
+
+      const token = createSessionToken(adminUser);
+      const isProd = process.env.NODE_ENV === 'production';
+
+      res.cookie('popcarty_session', token, {
+        httpOnly: true,
+        secure: isProd,
+        sameSite: 'lax',
+        path: '/',
+        maxAge: 24 * 60 * 60 * 1000,
+      });
+
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({
+        success: true,
+        token,
+        user: adminUser,
+      });
+      return;
+    }
+
+    // 2. Check Persistent Customer Database
+    const storedUser = getUserByEmailFromDb(cleanEmail);
+    if (!storedUser) {
+      res.status(401).json({
+        error: 'Unauthorized',
+        message: 'Invalid email or password. If you are a new shopper, please create an account first.',
+      });
+      return;
+    }
+
+    const isPasswordValid = verifyPassword(password, storedUser.passwordHash, storedUser.salt);
+    if (!isPasswordValid) {
+      res.status(401).json({
+        error: 'Unauthorized',
+        message: 'Invalid email or password. Please check your credentials and try again.',
+      });
+      return;
+    }
+
+    const user: AuthUser = {
+      id: storedUser.id,
+      email: storedUser.email,
+      name: storedUser.name,
+      phone: storedUser.phone,
+      role: storedUser.role,
+      memberSince: storedUser.memberSince || 'October 2026',
+    };
+
+    const token = createSessionToken(user);
+    const isProd = process.env.NODE_ENV === 'production';
+
+    res.cookie('popcarty_session', token, {
+      httpOnly: true,
+      secure: isProd,
+      sameSite: 'lax',
+      path: '/',
+      maxAge: 24 * 60 * 60 * 1000,
+    });
+
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      success: true,
+      token,
+      user,
+    });
+  } catch {
+    res.status(500).json({
+      error: 'Authentication Error',
+      message: 'An unexpected error occurred during sign in.',
+    });
+  }
 });
 
 apiRouter.post('/auth/logout', (req: Request, res: Response): void => {
@@ -134,7 +317,107 @@ apiRouter.get('/auth/me', authenticateUser, (req: AuthenticatedRequest, res: Res
     res.status(401).json({ error: 'Unauthorized', message: 'No active session found.' });
     return;
   }
+
+  // Enrich with latest DB record if customer exists in DB
+  if (req.user.role !== 'admin') {
+    const dbUser = getUserByIdFromDb(req.user.id) || getUserByEmailFromDb(req.user.email);
+    if (dbUser) {
+      res.json({
+        success: true,
+        user: {
+          id: dbUser.id,
+          email: dbUser.email,
+          name: dbUser.name,
+          phone: dbUser.phone,
+          role: dbUser.role,
+          memberSince: dbUser.memberSince,
+        },
+      });
+      return;
+    }
+  }
+
   res.json({ success: true, user: req.user });
+});
+
+apiRouter.put('/auth/profile', requireAuth, (req: AuthenticatedRequest, res: Response): void => {
+  try {
+    const userId = req.user!.id;
+    const { name, email, phone } = req.body || {};
+
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      res.status(400).json({ error: 'Validation Error', message: 'Full name is required.' });
+      return;
+    }
+    if (!email || typeof email !== 'string' || !EMAIL_REGEX.test(email.trim())) {
+      res.status(400).json({ error: 'Validation Error', message: 'A valid email address is required.' });
+      return;
+    }
+
+    if (req.user!.role === 'admin') {
+      res.json({
+        success: true,
+        user: {
+          ...req.user,
+          name: name.trim(),
+          email: email.trim().toLowerCase(),
+          phone: phone ? String(phone).trim() : '+91 98765 43210',
+        },
+      });
+      return;
+    }
+
+    const updated = updateUserProfileInDb(userId, {
+      name: name.trim(),
+      email: email.trim().toLowerCase(),
+      phone: phone ? String(phone).trim() : '',
+    });
+
+    if (!updated) {
+      res.json({
+        success: true,
+        user: {
+          ...req.user,
+          name: name.trim(),
+          email: email.trim().toLowerCase(),
+          phone: phone ? String(phone).trim() : '',
+        },
+      });
+      return;
+    }
+
+    res.json({
+      success: true,
+      user: {
+        id: updated.id,
+        email: updated.email,
+        name: updated.name,
+        phone: updated.phone,
+        role: updated.role,
+        memberSince: updated.memberSince,
+      },
+    });
+  } catch (err: any) {
+    if (err?.message === 'DUPLICATE_EMAIL') {
+      res.status(409).json({
+        error: 'Duplicate Email',
+        message: 'Another account is already using this email address.',
+      });
+      return;
+    }
+    res.status(500).json({ error: 'Server Error', message: 'Failed to update profile.' });
+  }
+});
+
+apiRouter.get('/addresses', requireAuth, (req: AuthenticatedRequest, res: Response): void => {
+  const addresses = getUserAddressesFromDb(req.user!.id);
+  res.json({ success: true, addresses });
+});
+
+apiRouter.put('/addresses', requireAuth, (req: AuthenticatedRequest, res: Response): void => {
+  const list = Array.isArray(req.body?.addresses) ? req.body.addresses : [];
+  const saved = saveUserAddressesInDb(req.user!.id, list);
+  res.json({ success: true, addresses: saved });
 });
 
 // ==========================================

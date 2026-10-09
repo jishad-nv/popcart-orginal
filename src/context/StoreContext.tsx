@@ -380,6 +380,21 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             window.history.replaceState({ page: 'home' }, '', '/');
             setCurrentPage('home');
           }
+        } else {
+          const data = await res.json();
+          if (data.user) {
+            const refreshedUser: User = {
+              id: data.user.id,
+              name: data.user.name,
+              email: data.user.email,
+              phone: data.user.phone || currentUserRef.current?.phone || '',
+              role: data.user.role === 'admin' ? 'admin' : 'customer',
+              memberSince: data.user.memberSince || currentUserRef.current?.memberSince || 'October 2026',
+            };
+            currentUserRef.current = refreshedUser;
+            setCurrentUser(refreshedUser);
+            safeSetStorage(STORAGE_KEYS.USER, refreshedUser);
+          }
         }
       } catch {
         // Keep current state on transient offline error
@@ -435,6 +450,21 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             const ordersData = await ordersRes.json();
             if (Array.isArray(ordersData.orders)) {
               setOrders(ordersData.orders);
+            }
+          }
+        } catch {
+          // Fallback to local state
+        }
+
+        try {
+          const addrRes = await fetch('/api/addresses', {
+            headers: { Authorization: `Bearer ${token}` },
+            credentials: 'include',
+          });
+          if (addrRes.ok) {
+            const addrData = await addrRes.json();
+            if (Array.isArray(addrData.addresses)) {
+              setAddresses(addrData.addresses);
             }
           }
         } catch {
@@ -1044,16 +1074,18 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     addToast('Coupon Deleted', 'Coupon removed from store.', 'info');
   };
 
-  // Auth & Profile (Backed by Real Server Session & Token Revocation)
+  // Auth & Profile (Backed by Real Server Session, Password Hashing & Token Revocation)
   const login = async (
     email: string,
-    role: 'customer' | 'admin' = 'customer',
+    _role: 'customer' | 'admin' = 'customer',
     password?: string
   ): Promise<boolean> => {
     try {
       const cleanEmail = email.trim().toLowerCase();
-      const effectivePassword =
-        password !== undefined ? password : role === 'admin' ? 'admin123' : 'customer123';
+      if (!cleanEmail || !password) {
+        addToast('Sign In Failed', 'Please enter both your email address and password.', 'error');
+        return false;
+      }
 
       const res = await fetch('/api/auth/login', {
         method: 'POST',
@@ -1061,7 +1093,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         credentials: 'include',
         body: JSON.stringify({
           email: cleanEmail,
-          password: effectivePassword,
+          password,
         }),
       });
 
@@ -1080,9 +1112,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           data.user?.name ||
           (verifiedRole === 'admin' ? 'Store Administrator' : 'Popcarty User'),
         email: data.user?.email || cleanEmail,
-        phone: '+91 98765 43210',
+        phone: data.user?.phone || '+91 98765 43210',
         role: verifiedRole,
-        memberSince: 'October 2026',
+        memberSince: data.user?.memberSince || 'October 2026',
         avatar:
           verifiedRole === 'admin'
             ? 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=120&q=80'
@@ -1105,7 +1137,30 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       currentUserRef.current = user;
       setCurrentUser(user);
-      setAddresses(loadStorage(STORAGE_KEYS.ADDRESSES, INITIAL_ADDRESSES));
+
+      // Sync user orders and addresses from backend
+      if (data.token) {
+        fetch('/api/orders', {
+          headers: { Authorization: `Bearer ${data.token}` },
+          credentials: 'include',
+        })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((d) => {
+            if (d && Array.isArray(d.orders)) setOrders(d.orders);
+          })
+          .catch(() => {});
+
+        fetch('/api/addresses', {
+          headers: { Authorization: `Bearer ${data.token}` },
+          credentials: 'include',
+        })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((d) => {
+            if (d && Array.isArray(d.addresses)) setAddresses(d.addresses);
+          })
+          .catch(() => {});
+      }
+
       setAuthModalOpen(false);
       addToast('Signed In', `Welcome back, ${user.name}!`, 'success');
       return true;
@@ -1123,14 +1178,15 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   ): Promise<boolean> => {
     try {
       const cleanEmail = email.trim().toLowerCase();
-      const res = await fetch('/api/auth/login', {
+      const res = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
           name: name.trim(),
           email: cleanEmail,
-          password: password || 'customer123',
+          phone: phone.trim(),
+          password: password || '',
         }),
       });
 
@@ -1143,11 +1199,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const data = await res.json();
       const user: User = {
         id: data.user?.id || `usr-${Date.now()}`,
-        name: name.trim() || 'Popcarty User',
-        email: cleanEmail,
-        phone: phone.trim() || '+91 98765 43210',
+        name: data.user?.name || name.trim() || 'Popcarty User',
+        email: data.user?.email || cleanEmail,
+        phone: data.user?.phone || phone.trim(),
         role: 'customer',
-        memberSince: 'October 2026',
+        memberSince: data.user?.memberSince || 'October 2026',
       };
 
       if (data.token) {
@@ -1236,13 +1292,40 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (!currentUser) return;
     const updatedUser: User = {
       ...currentUser,
-      name,
-      email,
-      phone,
+      name: name.trim(),
+      email: email.trim().toLowerCase(),
+      phone: phone.trim(),
     };
     currentUserRef.current = updatedUser;
     setCurrentUser(updatedUser);
+
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (token) {
+      fetch('/api/auth/profile', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        credentials: 'include',
+        body: JSON.stringify({
+          name: updatedUser.name,
+          email: updatedUser.email,
+          phone: updatedUser.phone,
+        }),
+      }).catch(() => {});
+    }
+
     addToast('Profile Saved', 'Your account details have been updated.', 'success');
+  };
+
+  const syncAddressesWithBackend = (nextAddresses: Address[]) => {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (token) {
+      fetch('/api/addresses', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        credentials: 'include',
+        body: JSON.stringify({ addresses: nextAddresses }),
+      }).catch(() => {});
+    }
   };
 
   // Addresses
@@ -1253,18 +1336,20 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       id: `addr-${Date.now()}`,
       userId: currentUser.id,
     };
-    if (newAddr.isDefault) {
-      setAddresses((prev) => prev.map((a) => ({ ...a, isDefault: false })).concat(newAddr));
-    } else {
-      setAddresses((prev) => [...prev, newAddr]);
-    }
+    setAddresses((prev) => {
+      const next = newAddr.isDefault
+        ? prev.map((a) => ({ ...a, isDefault: false })).concat(newAddr)
+        : [...prev, newAddr];
+      syncAddressesWithBackend(next);
+      return next;
+    });
     addToast('Address Saved', 'New delivery address added.', 'success');
   };
 
   const updateAddress = (id: string, updates: Partial<Address>) => {
     if (!currentUser) return;
-    setAddresses((prev) =>
-      prev.map((a) => {
+    setAddresses((prev) => {
+      const next = prev.map((a) => {
         if (a.id === id) {
           return { ...a, ...updates };
         }
@@ -1272,20 +1357,30 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           return { ...a, isDefault: false };
         }
         return a;
-      })
-    );
+      });
+      syncAddressesWithBackend(next);
+      return next;
+    });
     addToast('Address Updated', 'Changes saved successfully.', 'success');
   };
 
   const deleteAddress = (id: string) => {
     if (!currentUser) return;
-    setAddresses((prev) => prev.filter((a) => a.id !== id));
+    setAddresses((prev) => {
+      const next = prev.filter((a) => a.id !== id);
+      syncAddressesWithBackend(next);
+      return next;
+    });
     addToast('Address Deleted', 'Address removed from book.', 'info');
   };
 
   const setDefaultAddress = (id: string) => {
     if (!currentUser) return;
-    setAddresses((prev) => prev.map((a) => ({ ...a, isDefault: a.id === id })));
+    setAddresses((prev) => {
+      const next = prev.map((a) => ({ ...a, isDefault: a.id === id }));
+      syncAddressesWithBackend(next);
+      return next;
+    });
     addToast('Default Address Set', 'Default shipping location updated.', 'success');
   };
 

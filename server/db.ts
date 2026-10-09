@@ -9,11 +9,34 @@ const __dirname = path.dirname(__filename);
 const DATA_DIR = path.resolve(__dirname, '../data');
 const DB_FILE = path.join(DATA_DIR, 'database.json');
 
+export interface StoredUserRecord {
+  id: string;
+  name: string;
+  email: string;
+  phone: string;
+  passwordHash: string;
+  salt: string;
+  role: 'customer' | 'admin';
+  memberSince: string;
+  avatar?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface DatabaseSchema {
   products: Product[];
   orders: Order[];
   coupons: Coupon[];
   settings: StoreSettings;
+  users: StoredUserRecord[];
+  addresses: import('../src/types').Address[];
+  revokedJtis: string[];
+  adminCredentialsOverride?: {
+    email: string;
+    passwordHash: string;
+    salt: string;
+    updatedAt: string;
+  };
   importAuditLogs: {
     id: string;
     adminEmail: string;
@@ -26,10 +49,15 @@ export interface DatabaseSchema {
 }
 
 let dbCache: DatabaseSchema | null = null;
+const TMP_DB_FILE = '/tmp/popcarty_database.json';
 
 const ensureDataDir = () => {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+  } catch {
+    // Read-only filesystem in serverless environment
   }
 };
 
@@ -64,6 +92,9 @@ const getDefaultSeed = (): DatabaseSchema => {
         couponHighlight: 'POPCART30',
       },
     },
+    users: [],
+    addresses: [],
+    revokedJtis: [],
     importAuditLogs: [],
   };
 };
@@ -73,8 +104,9 @@ export const getDb = (): DatabaseSchema => {
   ensureDataDir();
 
   try {
-    if (fs.existsSync(DB_FILE)) {
-      const content = fs.readFileSync(DB_FILE, 'utf-8');
+    const targetReadFile = fs.existsSync(TMP_DB_FILE) ? TMP_DB_FILE : DB_FILE;
+    if (fs.existsSync(targetReadFile)) {
+      const content = fs.readFileSync(targetReadFile, 'utf-8');
       dbCache = JSON.parse(content);
       const defaults = getDefaultSeed();
 
@@ -82,6 +114,9 @@ export const getDb = (): DatabaseSchema => {
       if (!dbCache!.orders || !Array.isArray(dbCache!.orders)) dbCache!.orders = [];
       if (!dbCache!.coupons || !Array.isArray(dbCache!.coupons)) dbCache!.coupons = defaults.coupons;
       if (!dbCache!.settings) dbCache!.settings = defaults.settings;
+      if (!dbCache!.users || !Array.isArray(dbCache!.users)) dbCache!.users = [];
+      if (!dbCache!.addresses || !Array.isArray(dbCache!.addresses)) dbCache!.addresses = [];
+      if (!dbCache!.revokedJtis || !Array.isArray(dbCache!.revokedJtis)) dbCache!.revokedJtis = [];
       if (!dbCache!.importAuditLogs || !Array.isArray(dbCache!.importAuditLogs)) dbCache!.importAuditLogs = [];
 
       // STRICT CLEANUP MIGRATION: Deduplicate products by sourceProductId/sku, remove demo seed product, and enforce EXACTLY ONE image per product
@@ -132,8 +167,12 @@ export const saveDb = (data: DatabaseSchema): void => {
   dbCache = data;
   try {
     fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
-  } catch (err) {
-    console.error('Error persisting database to disk:', err);
+  } catch {
+    try {
+      fs.writeFileSync(TMP_DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
+    } catch (tmpErr) {
+      console.error('Error persisting database to disk:', tmpErr);
+    }
   }
 };
 
@@ -396,3 +435,114 @@ export const updateStoreSettingsInDb = (newSettings: Partial<StoreSettings>): St
   saveDb(db);
   return db.settings;
 };
+
+// 4. Users, Addresses & Revoked Session Tokens Operations
+export const getUserByEmailFromDb = (email: string): StoredUserRecord | undefined => {
+  const db = getDb();
+  const clean = email.trim().toLowerCase();
+  return db.users.find((u) => u.email.toLowerCase() === clean);
+};
+
+export const getUserByIdFromDb = (id: string): StoredUserRecord | undefined => {
+  const db = getDb();
+  return db.users.find((u) => u.id === id);
+};
+
+export const createUserInDb = (user: StoredUserRecord): StoredUserRecord => {
+  const db = getDb();
+  const cleanEmail = user.email.trim().toLowerCase();
+  const existingIdx = db.users.findIndex((u) => u.email.toLowerCase() === cleanEmail);
+  if (existingIdx >= 0) {
+    throw new Error('DUPLICATE_EMAIL');
+  }
+  const record: StoredUserRecord = {
+    ...user,
+    email: cleanEmail,
+  };
+  db.users.push(record);
+  saveDb(db);
+  return record;
+};
+
+export const updateUserProfileInDb = (
+  userId: string,
+  updates: { name?: string; email?: string; phone?: string }
+): StoredUserRecord | null => {
+  const db = getDb();
+  const idx = db.users.findIndex((u) => u.id === userId);
+  if (idx < 0) return null;
+
+  if (updates.email) {
+    const cleanEmail = updates.email.trim().toLowerCase();
+    const conflict = db.users.find((u, i) => i !== idx && u.email.toLowerCase() === cleanEmail);
+    if (conflict) {
+      throw new Error('DUPLICATE_EMAIL');
+    }
+    db.users[idx].email = cleanEmail;
+  }
+  if (updates.name !== undefined) {
+    db.users[idx].name = updates.name.trim();
+  }
+  if (updates.phone !== undefined) {
+    db.users[idx].phone = updates.phone.trim();
+  }
+  db.users[idx].updatedAt = new Date().toISOString();
+  saveDb(db);
+  return db.users[idx];
+};
+
+export const getUserAddressesFromDb = (userId: string): import('../src/types').Address[] => {
+  const db = getDb();
+  return db.addresses.filter((a) => a.userId === userId);
+};
+
+export const saveUserAddressesInDb = (
+  userId: string,
+  userAddresses: import('../src/types').Address[]
+): import('../src/types').Address[] => {
+  const db = getDb();
+  const otherAddresses = db.addresses.filter((a) => a.userId !== userId);
+  const normalized = userAddresses.map((a) => ({ ...a, userId }));
+  db.addresses = [...otherAddresses, ...normalized];
+  saveDb(db);
+  return normalized;
+};
+
+export const isJtiRevokedInDb = (jti: string): boolean => {
+  if (!jti) return false;
+  const db = getDb();
+  return db.revokedJtis.includes(jti);
+};
+
+export const revokeJtiInDb = (jti: string): void => {
+  if (!jti) return;
+  const db = getDb();
+  if (!db.revokedJtis.includes(jti)) {
+    db.revokedJtis.push(jti);
+    if (db.revokedJtis.length > 2000) {
+      db.revokedJtis = db.revokedJtis.slice(-1000);
+    }
+    saveDb(db);
+  }
+};
+
+export const getAdminCredentialsOverrideFromDb = (): DatabaseSchema['adminCredentialsOverride'] | undefined => {
+  const db = getDb();
+  return db.adminCredentialsOverride;
+};
+
+export const setAdminCredentialsOverrideInDb = (
+  email: string,
+  passwordHash: string,
+  salt: string
+): void => {
+  const db = getDb();
+  db.adminCredentialsOverride = {
+    email: email.trim().toLowerCase(),
+    passwordHash,
+    salt,
+    updatedAt: new Date().toISOString(),
+  };
+  saveDb(db);
+};
+

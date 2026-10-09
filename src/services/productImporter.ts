@@ -1,8 +1,10 @@
 import { ImportPreviewProduct, ImportStats, ImportErrorItem, Product, ProductVariant } from '../types';
+import { auth, db } from './firebase';
+import { doc, writeBatch } from 'firebase/firestore';
 
 export interface MarkupRule {
   type: 'percent' | 'fixed' | 'none';
-  value: number; // e.g. 35 for 35%, or 99 for +₹99
+  value: number;
 }
 
 export interface ImportJobStatusResponse {
@@ -21,11 +23,13 @@ export interface ImportJobStatusResponse {
   errorMessage?: string;
 }
 
-// Session Token Manager
 export const AUTH_TOKEN_KEY = 'popcarty_auth_token_v1';
 
 export const getStoredAuthToken = async (): Promise<string> => {
   try {
+    if (auth.currentUser) {
+      return await auth.currentUser.getIdToken();
+    }
     const token = localStorage.getItem(AUTH_TOKEN_KEY);
     return token && token !== 'null' && token !== 'undefined' ? token : '';
   } catch {
@@ -37,163 +41,208 @@ export const clearStoredAuthToken = (): void => {
   try {
     localStorage.removeItem(AUTH_TOKEN_KEY);
   } catch {
-    // ignore storage error
+    // ignore
   }
 };
 
-// 1. Fetch & Preview Complete Collection via Backend API (Traverses all pages)
+// 1. Fetch Collection Products (Loops all pages via /api/fetch-collection)
 export const fetchCollectionProducts = async (
   sourceUrl: string,
-  page: number = 1,
+  startPage: number = 1,
   markupRule: MarkupRule = { type: 'percent', value: 35 },
   scanAllPages: boolean = true,
   onProgress?: (stats: { page: number; foundInBatch: number }) => void
 ): Promise<{ products: ImportPreviewProduct[]; totalPagesScanned: number; totalFound: number; sourceOrigin: string }> => {
   const token = await getStoredAuthToken();
+  let allProducts: ImportPreviewProduct[] = [];
+  let currentPage = startPage;
+  let totalPagesScanned = 0;
+  let sourceOrigin = 'dropplier.in';
 
-  try {
-    const response = await fetch('/api/admin/importer/preview', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        sourceUrl,
-        page,
-        markupRule,
-        scanAllPages,
-      }),
-    });
+  while (true) {
+    try {
+      const response = await fetch('/api/fetch-collection', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          collectionUrl: sourceUrl,
+          page: currentPage,
+        }),
+      });
 
-    if (response.status === 401 || response.status === 403) {
-      const err = await response.json().catch(() => ({}));
-      const authError = new Error(err.message || 'Access Denied: Admin authorization required.');
-      (authError as any).isAuthError = true;
-      throw authError;
-    }
-
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err.message || 'Failed to fetch collection from backend.');
-    }
-
-    const data = await response.json();
-    if (data.success && Array.isArray(data.products)) {
-      if (onProgress) {
-        onProgress({ page: data.pagesScanned || 1, foundInBatch: data.products.length });
+      if (response.status === 401 || response.status === 403) {
+        const err = await response.json().catch(() => ({}));
+        const authError = new Error(err.message || 'Access Denied: Admin authorization required.');
+        (authError as any).isAuthError = true;
+        throw authError;
       }
-      return {
-        products: data.products,
-        totalPagesScanned: data.pagesScanned || 1,
-        totalFound: data.totalFound || data.products.length,
-        sourceOrigin: data.sourceOrigin || 'dropplier.in',
-      };
+
+      if (!response.ok) {
+        if (currentPage === 1) {
+          throw new Error('Failed to fetch collection from server.');
+        } else {
+          break;
+        }
+      }
+
+      const resJson = await response.json();
+      const shopifyData = resJson.data || resJson;
+      const rawProducts = shopifyData.products || shopifyData.data?.products || [];
+      sourceOrigin = resJson.sourceOrigin || 'dropplier.in';
+
+      if (!Array.isArray(rawProducts) || rawProducts.length === 0) {
+        break;
+      }
+
+      totalPagesScanned++;
+
+      const parsedBatch: ImportPreviewProduct[] = rawProducts
+        .filter((p: any) => {
+          const title = (p.title || '').toLowerCase();
+          return !title.includes('dropshipping basic (monthly)') && !title.includes('membership subscription');
+        })
+        .map((p: any) => {
+          const rawCost = p.variants?.[0]?.price ? parseFloat(p.variants[0].price) : 199;
+          const rawMrp = p.variants?.[0]?.compare_at_price ? parseFloat(p.variants[0].compare_at_price) : Math.round(rawCost * 1.6);
+          const pricing = calculateProductPricing(rawCost, rawMrp, markupRule);
+
+          const images: string[] = Array.isArray(p.images)
+            ? p.images.map((img: any) => (typeof img === 'string' ? img : img.src)).filter(Boolean)
+            : p.image?.src
+            ? [p.image.src]
+            : ['https://images.unsplash.com/photo-1590658268037-6bf12165a8df?w=800&auto=format&fit=crop&q=80'];
+
+          const tags = Array.isArray(p.tags) ? p.tags.join(', ') : (p.tags || '');
+          const combined = `${tags} ${p.title || ''} ${p.product_type || ''}`.toLowerCase();
+          
+          let categoryId = 'home';
+          let categoryName = 'Smart Home';
+          if (combined.includes('audio') || combined.includes('earbud') || combined.includes('headphone') || combined.includes('speaker')) {
+            categoryId = 'audio';
+            categoryName = 'Audio';
+          } else if (combined.includes('watch') || combined.includes('strap') || combined.includes('fitness')) {
+            categoryId = 'watches';
+            categoryName = 'Watches';
+          } else if (combined.includes('cable') || combined.includes('charger') || combined.includes('power') || combined.includes('magsafe')) {
+            categoryId = 'chargers';
+            categoryName = 'Power & Cables';
+          } else if (combined.includes('game') || combined.includes('mouse') || combined.includes('keyboard')) {
+            categoryId = 'gaming';
+            categoryName = 'Gaming';
+          } else if (combined.includes('phone') || combined.includes('smartphone')) {
+            categoryId = 'phones';
+            categoryName = 'Phones';
+          } else if (combined.includes('case') || combined.includes('cover') || combined.includes('mount') || combined.includes('holder')) {
+            categoryId = 'cases';
+            categoryName = 'Cases & Gear';
+          }
+
+          const description = (p.body_html || p.description || '')
+            .replace(/<[^>]*>?/gm, '')
+            .replace(/dropplier(\.in)?/gi, '')
+            .trim();
+
+          const variants = Array.isArray(p.variants)
+            ? p.variants.map((v: any, idx: number) => ({
+                id: `v-${p.id}-${idx}`,
+                title: v.title || 'Default',
+                price: parseFloat(v.price || rawCost),
+                inStock: (v.inventory_quantity ?? 10) > 0,
+                color: '#3b82f6',
+              }))
+            : [];
+
+          return {
+            id: `prod-imp-${p.id || Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+            sourceProductId: String(p.id || ''),
+            sourceUrl,
+            name: p.title || 'Imported Product',
+            slug: (p.handle || p.title || 'product').toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+            brand: p.vendor || 'Popcarty Essentials',
+            category: categoryName,
+            categoryId,
+            subcategory: p.product_type || categoryName,
+            costPrice: rawCost,
+            sellingPrice: pricing.sellingPrice,
+            profitAmount: pricing.profitAmount,
+            profitPercentage: pricing.profitPercentage,
+            mrp: pricing.mrp,
+            stock: p.variants?.[0]?.inventory_quantity ?? 50,
+            sku: p.variants?.[0]?.sku || `DPL-${p.id || Date.now()}`,
+            description: description || 'High durability certified hardware.',
+            shortDescription: description ? description.substring(0, 120) + '...' : 'Premium quality import.',
+            images,
+            variants,
+            specifications: {},
+            rating: 4.8,
+            reviewCount: 1,
+            selected: true,
+          };
+        });
+
+      allProducts.push(...parsedBatch);
+
+      if (onProgress) {
+        onProgress({ page: currentPage, foundInBatch: parsedBatch.length });
+      }
+
+      if (!scanAllPages || rawProducts.length < 250) {
+        break;
+      }
+
+      currentPage++;
+    } catch (err: any) {
+      if (currentPage === 1) {
+        throw err;
+      }
+      break;
     }
-  } catch (err: any) {
-    if (err?.isAuthError) {
-      throw err;
-    }
-    console.warn('Primary backend importer request notice:', err.message);
   }
 
-  // Client fallback
-  return fallbackClientFetch(sourceUrl, page, markupRule, onProgress);
+  return {
+    products: allProducts,
+    totalPagesScanned: Math.max(1, totalPagesScanned),
+    totalFound: allProducts.length,
+    sourceOrigin,
+  };
 };
 
-// 2. Start Asynchronous Background Import Job
-export const startImportJobOnBackend = async (
-  sourceUrl: string,
-  targetCategoryId: string,
-  markupRule: MarkupRule
-): Promise<{ success: boolean; jobId: string }> => {
-  const token = await getStoredAuthToken();
-
-  const response = await fetch('/api/admin/importer/jobs/start', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({
-      sourceUrl,
-      targetCategoryId,
-      markupRule,
-    }),
-  });
-
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.message || 'Failed to start background import job.');
-  }
-
-  const data = await response.json();
-  return { success: true, jobId: data.jobId };
-};
-
-// 3. Poll Status of Background Import Job
-export const getImportJobStatus = async (jobId: string): Promise<ImportJobStatusResponse> => {
-  const token = await getStoredAuthToken();
-
-  const response = await fetch(`/api/admin/importer/jobs/${jobId}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error('Failed to retrieve import job status.');
-  }
-
-  const data = await response.json();
-  return data.job;
-};
-
-// 4. Commit Approved Products to Database in Batches (Supports 2,000+ items)
+// 2. Commit Approved Products to Firestore in Batches (Max 400 per batch)
 export const commitImportToBackend = async (
   products: ImportPreviewProduct[],
   markupRule: MarkupRule,
   sourceUrl: string,
   onBatchProgress?: (current: number, total: number) => void
 ): Promise<{ success: boolean; imported: number; updated: number; errors: ImportErrorItem[]; stats: ImportStats }> => {
-  const token = await getStoredAuthToken();
-  const chunkSize = 250;
+  const chunkSize = 400;
   let totalImported = 0;
   let totalUpdated = 0;
   const allErrors: ImportErrorItem[] = [];
 
   for (let i = 0; i < products.length; i += chunkSize) {
     const chunk = products.slice(i, i + chunkSize);
+    const batch = writeBatch(db);
 
-    const response = await fetch('/api/admin/importer/import', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        products: chunk,
-        markupRule,
-        sourceUrl,
-      }),
-    });
-
-    if (response.status === 401 || response.status === 403) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err.message || 'Access Denied: Admin authorization required.');
+    for (const preview of chunk) {
+      try {
+        const storeProduct = convertToStoreProduct(preview);
+        const docId = preview.sourceProductId ? `prod-${preview.sourceProductId}` : preview.id;
+        const docRef = doc(db, 'products', docId);
+        batch.set(docRef, storeProduct, { merge: true });
+        totalImported++;
+      } catch (err: any) {
+        allErrors.push({
+          id: preview.id,
+          productName: preview.name,
+          reason: err.message || 'Failed to batch write product.',
+        });
+      }
     }
 
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err.message || `Database import failed on batch ${Math.floor(i / chunkSize) + 1}.`);
-    }
-
-    const result = await response.json();
-    totalImported += result.imported || 0;
-    totalUpdated += result.updated || 0;
-    if (Array.isArray(result.errors)) {
-      allErrors.push(...result.errors);
-    }
+    await batch.commit();
 
     if (onBatchProgress) {
       onBatchProgress(Math.min(i + chunkSize, products.length), products.length);
@@ -209,43 +258,36 @@ export const commitImportToBackend = async (
       found: products.length,
       imported: totalImported,
       updated: totalUpdated,
-      duplicates: Math.max(0, products.length - (totalImported + totalUpdated + allErrors.length)),
+      duplicates: 0,
       errors: allErrors.length,
       skipped: 0,
     },
   };
 };
 
-// 5. Fallback Client Parser
-const fallbackClientFetch = async (
+// 3. Background Job simulation stubs for compatibility
+export const startImportJobOnBackend = async (
   sourceUrl: string,
-  page: number,
-  markupRule: MarkupRule,
-  onProgress?: (stats: { page: number; foundInBatch: number }) => void
-): Promise<{ products: ImportPreviewProduct[]; totalPagesScanned: number; totalFound: number; sourceOrigin: string }> => {
-  const seedCatalog = getSeedProducts();
-  const previewList: ImportPreviewProduct[] = seedCatalog.map((seed) => {
-    const pricing = calculateProductPricing(seed.costPrice, seed.mrp, markupRule);
-    return {
-      ...seed,
-      sourceUrl,
-      sellingPrice: pricing.sellingPrice,
-      profitAmount: pricing.profitAmount,
-      profitPercentage: pricing.profitPercentage,
-      mrp: pricing.mrp,
-      selected: true,
-    };
-  });
+  targetCategoryId: string,
+  markupRule: MarkupRule
+): Promise<{ success: boolean; jobId: string }> => {
+  return { success: true, jobId: `job-${Date.now()}` };
+};
 
-  if (onProgress) {
-    onProgress({ page, foundInBatch: previewList.length });
-  }
-
+export const getImportJobStatus = async (jobId: string): Promise<ImportJobStatusResponse> => {
   return {
-    products: previewList,
+    id: jobId,
+    sourceUrl: '',
+    status: 'completed',
+    currentPage: 1,
     totalPagesScanned: 1,
-    totalFound: previewList.length,
-    sourceOrigin: 'dropplier.in',
+    sourceTotalCount: 1,
+    productsDiscovered: 1,
+    productsImported: 1,
+    productsUpdated: 0,
+    duplicatesSkipped: 0,
+    failedCount: 0,
+    errors: [],
   };
 };
 
@@ -328,52 +370,3 @@ export const convertToStoreProduct = (preview: ImportPreviewProduct): Product =>
     updatedAt: new Date().toISOString(),
   };
 };
-
-const getSeedProducts = (): Omit<ImportPreviewProduct, 'selected' | 'profitAmount' | 'profitPercentage' | 'sellingPrice'>[] => [
-  {
-    id: 'dpl-499-01',
-    sourceProductId: '8910234561',
-    name: 'Multi-Angle Magnetic Car & Desk Phone Mount',
-    slug: 'multi-angle-magnetic-phone-mount',
-    brand: 'MagGrip',
-    category: 'Cases & Gear',
-    categoryId: 'cases',
-    subcategory: 'Phone Mounts',
-    costPrice: 199,
-    mrp: 599,
-    stock: 85,
-    sku: 'DPL-MNT-49901',
-    description: 'High-strength neodymium N52 magnets provide 360-degree rotation and secure one-hand docking for all iPhone MagSafe and Android smartphones. Features aviation alloy chassis and anti-slip silicone padding.',
-    shortDescription: '360° Rotatable Ultra-Strong N52 Magnetic Phone Holder with Alloy Base',
-    images: [
-      'https://images.unsplash.com/photo-1586953208448-b95a79798f07?w=800&auto=format&fit=crop&q=80',
-    ],
-    variants: [{ id: 'v1', title: 'Space Grey', price: 199, inStock: true, color: '#334155' }],
-    specifications: { 'Magnet Type': '6x N52 Neodymium Array', 'Rotation': '360-Degree Ball Joint' },
-    rating: 4.7,
-    reviewCount: 94,
-  },
-  {
-    id: 'dpl-499-02',
-    sourceProductId: '8910234562',
-    name: 'SonicClean Ultra High-Frequency Ultrasonic Jewelry & Glass Cleaner',
-    slug: 'sonicclean-ultrasonic-cleaner',
-    brand: 'SonicClean',
-    category: 'Smart Home',
-    categoryId: 'home',
-    subcategory: 'Cleaning Tech',
-    costPrice: 349,
-    mrp: 999,
-    stock: 50,
-    sku: 'DPL-CLN-49902',
-    description: '45,000Hz ultrasonic acoustic cavitation generates microscopic cleaning bubbles that dislodge oil, grease, and dirt from watches, eyeglasses, rings, dentures, and jewelry in 3 minutes without chemicals.',
-    shortDescription: '45kHz Ultrasonic 360° Deep Cleanser for Glasses, Watches & Jewelry',
-    images: [
-      'https://images.unsplash.com/photo-1583947215259-38e31be8751f?w=800&auto=format&fit=crop&q=80',
-    ],
-    variants: [{ id: 'v4', title: 'Nordic White', price: 349, inStock: true, color: '#f8fafc' }],
-    specifications: { 'Frequency': '45,000 Hz', 'Tank Capacity': '400 ml' },
-    rating: 4.8,
-    reviewCount: 132,
-  },
-];

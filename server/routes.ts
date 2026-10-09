@@ -61,6 +61,36 @@ export const apiRouter = Router();
 // Apply General Rate Limiter across API
 apiRouter.use(generalApiRateLimiter);
 
+// Fetch collection proxy endpoint for local development and Vercel consistency
+apiRouter.all('/fetch-collection', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const body = req.method === 'POST' ? req.body : req.query;
+    const collectionUrl = body?.collectionUrl || body?.sourceUrl || req.query?.url;
+    const page = Number(body?.page || req.query?.page || 1);
+
+    if (!collectionUrl || typeof collectionUrl !== 'string') {
+      res.status(400).json({ error: 'Validation Error', message: 'Collection URL is required.' });
+      return;
+    }
+
+    const parsed = new URL(collectionUrl);
+    if (parsed.hostname !== 'dropplier.in' && !parsed.hostname.endsWith('.dropplier.in')) {
+      res.status(403).json({ error: 'Forbidden', message: 'Only dropplier.in domain is allowed.' });
+      return;
+    }
+
+    const result = await fetchSupplierCollectionPage(collectionUrl, page, 250, { type: 'percent', value: 35 });
+    res.json({
+      success: true,
+      page,
+      data: { products: result.products },
+      sourceOrigin: result.sourceOrigin,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Server Error', message: err.message || 'Failed to fetch collection.' });
+  }
+});
+
 // ==========================================
 // 1. AUTHENTICATION ROUTES (PHASE 3 & 4 HARDENING)
 // ==========================================

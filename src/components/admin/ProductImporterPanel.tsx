@@ -119,7 +119,7 @@ export const ProductImporterPanel: React.FC = () => {
     }
   };
 
-  // 2. Direct 1-Click Complete Collection Background Import (2,000+ items)
+  // 2. Direct 1-Click Complete Collection Import (2,000+ items)
   const handleStartFullCollectionJob = async () => {
     if (!sourceUrl.trim()) {
       addToast('URL Required', 'Please provide a collection URL.', 'error');
@@ -128,63 +128,66 @@ export const ProductImporterPanel: React.FC = () => {
 
     setIsImporting(true);
     setImportProgress(5);
-    setImportStatusMessage('Starting full collection import job on backend...');
+    setImportStatusMessage('Scanning all pages from supplier collection...');
     setErrorList([]);
     setImportStats(null);
 
     const rule: MarkupRule = { type: markupType, value: markupValue };
 
     try {
-      const { jobId } = await startImportJobOnBackend(sourceUrl, selectedTargetCategory, rule);
-      setActiveJobId(jobId);
-
-      // Start polling
-      if (jobPollInterval.current) clearInterval(jobPollInterval.current);
-      jobPollInterval.current = setInterval(async () => {
-        try {
-          const job = await getImportJobStatus(jobId);
-          if (job) {
-            setCurrentImportedCount(job.productsImported + job.productsUpdated);
-            setTotalImportTarget(job.productsDiscovered);
-
-            const pct = job.productsDiscovered > 0
-              ? Math.min(99, Math.round(((job.productsImported + job.productsUpdated) / job.productsDiscovered) * 100))
-              : Math.min(90, job.currentPage * 8);
-
-            setImportProgress(pct);
-            setImportStatusMessage(
-              `Processing page ${job.currentPage} • ${job.productsImported + job.productsUpdated} / ${job.productsDiscovered || '...'} products imported`
-            );
-
-            if (job.status === 'completed' || job.status === 'failed') {
-              clearInterval(jobPollInterval.current);
-              setIsImporting(false);
-              setImportProgress(100);
-
-              setImportStats({
-                found: job.productsDiscovered,
-                imported: job.productsImported,
-                updated: job.productsUpdated,
-                skipped: job.duplicatesSkipped,
-                duplicates: job.duplicatesSkipped,
-                errors: job.failedCount,
-              });
-
-              setErrorList(job.errors || []);
-              addToast(
-                'Complete Collection Imported',
-                `Successfully imported ${job.productsImported} new products from ${job.totalPagesScanned} pages.`,
-                'success'
-              );
-            }
-          }
-        } catch {
-          // continue polling
+      const scanResult = await fetchCollectionProducts(
+        sourceUrl,
+        1,
+        rule,
+        true,
+        (stats) => {
+          setImportStatusMessage(`Scanned page ${stats.page} • Found ${stats.foundInBatch} products in batch...`);
+          setImportProgress(Math.min(50, stats.page * 10));
         }
-      }, 1000);
+      );
+
+      const productsToCommit = scanResult.products.map((p) => {
+        if (selectedTargetCategory !== 'auto') {
+          const catObj = categories.find((c) => c.id === selectedTargetCategory);
+          return {
+            ...p,
+            categoryId: selectedTargetCategory,
+            category: catObj ? catObj.name : p.category,
+          };
+        }
+        return p;
+      });
+
+      setImportStatusMessage(`Saving ${productsToCommit.length} products to database...`);
+      setImportProgress(60);
+
+      const commitResult = await commitImportToBackend(
+        productsToCommit,
+        rule,
+        sourceUrl,
+        (current, total) => {
+          setCurrentImportedCount(current);
+          setTotalImportTarget(total);
+          setImportProgress(60 + Math.round((current / total) * 35));
+          setImportStatusMessage(`Saving to database... ${current} / ${total} products saved`);
+        }
+      );
+
+      const validStoreProducts = productsToCommit.map((p) => convertToStoreProduct(p));
+      importProducts(validStoreProducts);
+
+      setIsImporting(false);
+      setImportProgress(100);
+      setImportStats(commitResult.stats);
+      setErrorList(commitResult.errors);
+      addToast(
+        'Complete Collection Imported',
+        `Successfully imported ${commitResult.imported} products across ${scanResult.totalPagesScanned} pages.`,
+        'success'
+      );
     } catch (err: any) {
       setIsImporting(false);
-      addToast('Import Failed', err.message || 'Failed to start import job.', 'error');
+      addToast('Import Failed', err.message || 'Failed to complete collection import.', 'error');
     }
   };
 

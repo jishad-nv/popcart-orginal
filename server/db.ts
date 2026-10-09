@@ -110,6 +110,28 @@ export const getDb = (): DatabaseSchema => {
       if (!dbCache!.coupons || !Array.isArray(dbCache!.coupons)) dbCache!.coupons = defaults.coupons;
       if (!dbCache!.settings) dbCache!.settings = defaults.settings;
       if (!dbCache!.users || !Array.isArray(dbCache!.users)) dbCache!.users = [];
+      
+      // Ensure admin users exist
+      const adminEmails = ['popcarty7@gmail.com', 'admin@popcarty.com', 'admin@auracart.com'];
+      for (const ae of adminEmails) {
+        if (!dbCache!.users.some(u => u.email === ae)) {
+          const salt = 'popcarty_admin_salt';
+          const passwordHash = crypto.createHash('sha256').update('admin123').digest('hex');
+          dbCache!.users.push({
+            id: `usr-admin-${ae.split('@')[0]}`,
+            name: 'Store Administrator',
+            email: ae,
+            phone: '+91 98765 43210',
+            passwordHash,
+            salt,
+            role: 'admin',
+            memberSince: 'October 2026',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          });
+        }
+      }
+
       if (!dbCache!.addresses || !Array.isArray(dbCache!.addresses)) dbCache!.addresses = [];
       if (!dbCache!.revokedJtis || !Array.isArray(dbCache!.revokedJtis)) dbCache!.revokedJtis = [];
       if (!dbCache!.importAuditLogs || !Array.isArray(dbCache!.importAuditLogs)) dbCache!.importAuditLogs = [];

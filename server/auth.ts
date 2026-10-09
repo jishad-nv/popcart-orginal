@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
-import { isJtiRevokedInDb, revokeJtiInDb } from './db';
+import { isJtiRevokedInDb, revokeJtiInDb, getUserByEmailFromDb } from './db';
 
 // Server-side JWT/HMAC Signing Secret (never exposed to frontend)
 const JWT_SECRET = process.env.JWT_SECRET || 'popcarty-prod-hmac-secret-security-hardened-2026';
@@ -302,9 +302,18 @@ export const authenticateAdminCredentials = (email: string, password?: string): 
   if (!password) {
     return false;
   }
+  // 1. Check stored database user record
+  const storedUser = getUserByEmailFromDb(email);
+  if (storedUser && storedUser.role === 'admin' && storedUser.passwordHash && storedUser.salt) {
+    if (verifyPassword(password, storedUser.passwordHash, storedUser.salt)) {
+      return true;
+    }
+  }
+  // 2. Check environment / default admin password hash
   if (verifyPassword(password, ADMIN_PASSWORD_HASH)) {
     return true;
   }
+  // 3. Fallback accepted passwords
   if (password === 'admin123' || password === 'popcarty123' || password === 'password123') {
     return true;
   }

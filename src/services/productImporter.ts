@@ -1,6 +1,6 @@
 import { ImportPreviewProduct, ImportStats, ImportErrorItem, Product, ProductVariant } from '../types';
 import { auth, db } from './firebase';
-import { doc, writeBatch } from 'firebase/firestore';
+import { doc, writeBatch, collection, getDocs, getCountFromServer } from 'firebase/firestore';
 
 export interface MarkupRule {
   type: 'percent' | 'fixed' | 'none';
@@ -45,7 +45,21 @@ export const clearStoredAuthToken = (): void => {
   }
 };
 
-// 1. Fetch Collection Products (Loops all pages via /api/fetch-collection)
+export const getFirestoreProductCount = async (): Promise<number> => {
+  try {
+    const snapshot = await getCountFromServer(collection(db, 'products'));
+    return snapshot.data().count;
+  } catch {
+    try {
+      const snap = await getDocs(collection(db, 'products'));
+      return snap.size;
+    } catch {
+      return 0;
+    }
+  }
+};
+
+// 1. Fetch Collection Products (Loops all pages via /api/fetch-collection with strict error reporting and logging)
 export const fetchCollectionProducts = async (
   sourceUrl: string,
   startPage: number = 1,
@@ -59,41 +73,57 @@ export const fetchCollectionProducts = async (
   let totalPagesScanned = 0;
   let sourceOrigin = 'dropplier.in';
 
+  // Strip ?page= or any query params from sourceUrl
+  const cleanSourceUrl = sourceUrl.split('?')[0];
+
   while (true) {
+    const targetUrl = '/api/fetch-collection';
+    let response: Response;
+    let responseText = '';
+
     try {
-      const response = await fetch('/api/fetch-collection', {
+      response = await fetch(targetUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
-          collectionUrl: sourceUrl,
+          collectionUrl: cleanSourceUrl,
           page: currentPage,
         }),
       });
 
+      responseText = await response.text();
+      let resJson: any = {};
+      try {
+        resJson = JSON.parse(responseText);
+      } catch {
+        // not json
+      }
+
+      console.log(`[Fetch Step] URL: ${cleanSourceUrl} | Page: ${currentPage} | Status: ${response.status} | Response Preview:`, responseText.substring(0, 200));
+
       if (response.status === 401 || response.status === 403) {
-        const err = await response.json().catch(() => ({}));
-        const authError = new Error(err.message || 'Access Denied: Admin authorization required.');
+        const authError = new Error(resJson.message || `Access Denied (HTTP ${response.status}): ${responseText.substring(0, 200)}`);
         (authError as any).isAuthError = true;
         throw authError;
       }
 
       if (!response.ok) {
-        if (currentPage === 1) {
-          throw new Error('Failed to fetch collection from server.');
-        } else {
-          break;
-        }
+        throw new Error(`Failed to fetch collection (HTTP ${response.status}). URL: ${cleanSourceUrl} | Body: ${responseText.substring(0, 200)}`);
       }
 
-      const resJson = await response.json();
       const shopifyData = resJson.data || resJson;
       const rawProducts = shopifyData.products || shopifyData.data?.products || [];
       sourceOrigin = resJson.sourceOrigin || 'dropplier.in';
 
+      console.log(`[Fetch Step] Page ${currentPage} Products Count:`, rawProducts.length);
+
       if (!Array.isArray(rawProducts) || rawProducts.length === 0) {
+        if (currentPage === 1) {
+          throw new Error(`Source collection returned 0 products. Request URL: ${cleanSourceUrl}, Status: ${response.status}, Body: ${responseText.substring(0, 200)}`);
+        }
         break;
       }
 
@@ -158,7 +188,7 @@ export const fetchCollectionProducts = async (
           return {
             id: `prod-imp-${p.id || Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
             sourceProductId: String(p.id || ''),
-            sourceUrl,
+            sourceUrl: cleanSourceUrl,
             name: p.title || 'Imported Product',
             slug: (p.handle || p.title || 'product').toLowerCase().replace(/[^a-z0-9]+/g, '-'),
             brand: p.vendor || 'Popcarty Essentials',
@@ -195,11 +225,16 @@ export const fetchCollectionProducts = async (
 
       currentPage++;
     } catch (err: any) {
+      console.error(`[Fetch Error] Page ${currentPage}:`, err);
       if (currentPage === 1) {
         throw err;
       }
       break;
     }
+  }
+
+  if (allProducts.length === 0) {
+    throw new Error(`Import failed: Source total is 0 products. Request URL: ${cleanSourceUrl}.`);
   }
 
   return {
@@ -210,7 +245,7 @@ export const fetchCollectionProducts = async (
   };
 };
 
-// 2. Commit Approved Products to Firestore in Batches (Max 400 per batch)
+// 2. Commit Approved Products to Firestore in Batches (Max 400 per batch) and read back true saved count
 export const commitImportToBackend = async (
   products: ImportPreviewProduct[],
   markupRule: MarkupRule,
@@ -249,14 +284,16 @@ export const commitImportToBackend = async (
     }
   }
 
+  const savedCountFromDb = await getFirestoreProductCount();
+
   return {
     success: true,
-    imported: totalImported,
+    imported: savedCountFromDb > 0 ? savedCountFromDb : totalImported,
     updated: totalUpdated,
     errors: allErrors,
     stats: {
       found: products.length,
-      imported: totalImported,
+      imported: savedCountFromDb > 0 ? savedCountFromDb : totalImported,
       updated: totalUpdated,
       duplicates: 0,
       errors: allErrors.length,

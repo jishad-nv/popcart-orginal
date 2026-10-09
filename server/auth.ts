@@ -3,9 +3,9 @@ import crypto from 'crypto';
 import { isJtiRevokedInDb, revokeJtiInDb, getUserByEmailFromDb } from './db';
 
 // Server-side JWT/HMAC Signing Secret (never exposed to frontend)
-const JWT_SECRET = process.env.JWT_SECRET || 'popcarty-prod-hmac-secret-security-hardened-2026';
+const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'popcarty7@gmail.com').toLowerCase();
-const ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH || hashPassword(process.env.ADMIN_PASSWORD || 'admin123', 'popcarty_admin_salt');
+const ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH || (process.env.ADMIN_PASSWORD ? hashPassword(process.env.ADMIN_PASSWORD, 'popcarty_admin_salt') : '');
 
 // Server-Side Session & Revocation Registry
 // Tracks revoked tokens and active session IDs (jti) so logged-out tokens are immediately rejected
@@ -302,11 +302,7 @@ export const authenticateAdminCredentials = (email: string, password?: string): 
     }
   }
   // 2. Check environment / default admin password hash
-  if (verifyPassword(password, ADMIN_PASSWORD_HASH)) {
-    return true;
-  }
-  // 3. Fallback accepted passwords
-  if (password === 'admin123' || password === 'popcarty123') {
+  if (ADMIN_PASSWORD_HASH && verifyPassword(password, ADMIN_PASSWORD_HASH)) {
     return true;
   }
   return false;

@@ -114,9 +114,9 @@ export const getDb = (): DatabaseSchema => {
       
       // Ensure owner admin user exists
       const adminEmail = (process.env.ADMIN_EMAIL || 'popcarty7@gmail.com').toLowerCase();
-      if (!dbCache!.users.some(u => u.email.toLowerCase() === adminEmail)) {
+      if (process.env.ADMIN_PASSWORD && !dbCache!.users.some(u => u.email.toLowerCase() === adminEmail)) {
         const salt = 'popcarty_admin_salt';
-        const passwordHash = crypto.pbkdf2Sync(process.env.ADMIN_PASSWORD || 'admin123', salt, 10000, 64, 'sha512').toString('hex');
+        const passwordHash = crypto.pbkdf2Sync(process.env.ADMIN_PASSWORD as string, salt, 10000, 64, 'sha512').toString('hex');
         dbCache!.users.push({
           id: `usr-admin-owner`,
           name: 'Store Owner',

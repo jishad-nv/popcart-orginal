@@ -100,8 +100,9 @@ export const calculateProductPricing = (
     rawSelling = cost;
   }
 
-  let sellingPrice = Math.round(rawSelling / 10) * 10 - 1;
-  if (sellingPrice < cost) sellingPrice = cost + 9;
+  let sellingPrice = Math.ceil(rawSelling / 10) * 10 - 1;
+  const minPrice = Math.ceil(cost) + 9;
+  if (sellingPrice < minPrice) sellingPrice = minPrice;
 
   const mrp = Math.max(sellingPrice, originalMrp || Math.round(sellingPrice * 1.5));
   const profitAmount = sellingPrice - cost;
@@ -381,8 +382,12 @@ export const fetchCollectionProducts = async (
         throw authError;
       }
 
-      if (!response.ok || (response.status === 404 && currentPage === 1)) {
-        return await fetchViaHtmlFallback(cleanSourceUrl, markupRule, onProgress);
+      if (!response.ok) {
+        const fetchError = new Error(
+          `Supplier fetch failed (HTTP ${response.status}) for ${cleanSourceUrl} page ${currentPage}: ${resJson.message || responseText.substring(0, 200)}`
+        );
+        (fetchError as any).isFatal = true;
+        throw fetchError;
       }
 
       const rawProducts = resJson.products || [];
@@ -390,7 +395,11 @@ export const fetchCollectionProducts = async (
 
       if (!Array.isArray(rawProducts) || rawProducts.length === 0) {
         if (currentPage === 1) {
-          return await fetchViaHtmlFallback(cleanSourceUrl, markupRule, onProgress);
+          const emptyError = new Error(
+            `Supplier returned 0 products for ${cleanSourceUrl}. Response: ${responseText.substring(0, 200)}`
+          );
+          (emptyError as any).isFatal = true;
+          throw emptyError;
         }
         break;
       }
@@ -408,7 +417,7 @@ export const fetchCollectionProducts = async (
 
       currentPage++;
     } catch (err: any) {
-      if (err.isAuthError) throw err;
+      if (err.isAuthError || err.isFatal) throw err;
       if (currentPage === 1) {
         throw new Error(`Source collection returned 0 products. Request URL: ${cleanSourceUrl}, Status: ${err.status || 500}, Body: ${err.message || lastResponseText.substring(0, 200)}`);
       }
@@ -447,7 +456,7 @@ export const commitImportToBackend = async (
         const storeProduct = convertToStoreProduct(preview);
         const docId = preview.sourceProductId ? `prod-${preview.sourceProductId}` : preview.id;
         const docRef = doc(db, 'products', docId);
-        batch.set(docRef, storeProduct, { merge: true });
+        batch.set(docRef, JSON.parse(JSON.stringify(storeProduct)), { merge: true });
         totalImported++;
       } catch (err: any) {
         allErrors.push({

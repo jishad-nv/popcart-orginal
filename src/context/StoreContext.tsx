@@ -356,7 +356,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const unsubAuth = onAuthStateChanged(auth, (firebaseUser) => {
       if (firebaseUser) {
         const userEmail = (firebaseUser.email || '').toLowerCase();
-        const isAdminUser = userEmail === 'popcarty7@gmail.com' || userEmail === 'admin@popcarty.com';
+        const isAdminUser = userEmail === 'popcarty7@gmail.com';
         const user: User = {
           id: firebaseUser.uid,
           name: firebaseUser.displayName || (isAdminUser ? 'Store Administrator' : 'Popcarty Customer'),
@@ -1008,7 +1008,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
       const userEmail = (cred.user.email || cleanEmail).toLowerCase();
-      const isAdminUser = userEmail === 'popcarty7@gmail.com' || userEmail === 'admin@popcarty.com';
+      const isAdminUser = userEmail === 'popcarty7@gmail.com';
 
       const user: User = {
         id: cred.user.uid,

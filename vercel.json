@@ -1,8 +1,11 @@
 {
   "version": 2,
+  "functions": {
+    "api/fetch-collection.ts": { "maxDuration": 30 }
+  },
   "rewrites": [
     {
-      "source": "/api/(.*)",
+      "source": "/api/((?!fetch-collection).*)",
       "destination": "/api/index.ts"
     },
     {

@@ -41,7 +41,7 @@ export const ProductImporterPanel: React.FC = () => {
   const [sourceUrl, setSourceUrl] = useState('https://dropplier.in/collections/all');
   const [selectedTargetCategory, setSelectedTargetCategory] = useState<string>('auto');
   const [markupType, setMarkupType] = useState<'percent' | 'fixed'>('percent');
-  const [markupValue, setMarkupValue] = useState<number>(35);
+  const [markupValue, setMarkupValue] = useState<number>(30);
   const [scanAllPages, setScanAllPages] = useState<boolean>(true);
 
   // Scan / Preview State
@@ -438,14 +438,14 @@ export const ProductImporterPanel: React.FC = () => {
 
             <div className="flex items-center gap-1.5 bg-white p-1 rounded-xl border border-slate-200 shadow-2xs">
               <button
-                onClick={() => handleApplyMarkupToPreview('percent', 35)}
+                onClick={() => handleApplyMarkupToPreview('percent', 30)}
                 className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
-                  markupType === 'percent' && markupValue === 35
+                  markupType === 'percent' && markupValue === 30
                     ? 'bg-violet-600 text-white font-bold'
                     : 'text-slate-600 hover:bg-slate-100'
                 }`}
               >
-                +35% Margin
+                +30% Margin
               </button>
               <button
                 onClick={() => handleApplyMarkupToPreview('percent', 50)}

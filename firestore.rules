@@ -5,14 +5,12 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    // Only the store owner. No other email, no "verified email" shortcut.
     function isOwner() {
-      return isSignedIn() && (
-        request.auth.token.email == 'popcarty7@gmail.com' ||
-        request.auth.token.email == 'admin@popcarty.com' ||
-        request.auth.token.email_verified == true
-      );
+      return isSignedIn() && request.auth.token.email == 'popcarty7@gmail.com';
     }
 
+    // Default: deny everything
     match /{document=**} {
       allow read, write: if false;
     }
@@ -20,11 +18,6 @@ service cloud.firestore {
     match /products/{productId} {
       allow read: if true;
       allow write: if isOwner();
-    }
-
-    match /orders/{orderId} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn();
     }
 
     match /categories/{categoryId} {
@@ -42,9 +35,17 @@ service cloud.firestore {
       allow write: if isOwner();
     }
 
+    // Orders: a customer can only create an order for themselves. Only the owner can read or change orders.
+    match /orders/{orderId} {
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read, update, delete: if isOwner();
+    }
+
+    // Reviews: anyone signed in can add one; only the owner can edit or remove.
     match /reviews/{reviewId} {
       allow read: if true;
-      allow write: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update, delete: if isOwner();
     }
   }
 }

@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useStore } from '../context/StoreContext';
 import { PopcartyLogo } from '../components/common/PopcartyLogo';
 import { ProductImporterPanel } from '../components/admin/ProductImporterPanel';
+import { ProductRestorePanel } from '../components/admin/ProductRestorePanel';
 import { Product, OrderStatus, Coupon, ProductVariant } from '../types';
 import {
   ShieldCheck,
@@ -718,7 +719,8 @@ export const AdminDashboard: React.FC = () => {
 
       {/* 2. DEDICATED PRODUCT IMPORT SYSTEM TAB */}
       {activeTab === 'import' && (
-        <div className="animate-in fade-in duration-150">
+        <div className="animate-in fade-in duration-150 space-y-6">
+          <ProductRestorePanel />
           <ProductImporterPanel />
         </div>
       )}

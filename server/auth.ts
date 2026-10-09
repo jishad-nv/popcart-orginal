@@ -4,10 +4,8 @@ import { isJtiRevokedInDb, revokeJtiInDb, getUserByEmailFromDb } from './db';
 
 // Server-side JWT/HMAC Signing Secret (never exposed to frontend)
 const JWT_SECRET = process.env.JWT_SECRET || 'popcarty-prod-hmac-secret-security-hardened-2026';
-const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'admin@popcarty.com').toLowerCase();
-const ALT_ADMIN_EMAIL = 'admin@auracart.com';
-const USER_ADMIN_EMAIL = 'popcarty7@gmail.com';
-const ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH || hashPassword(process.env.ADMIN_PASSWORD || 'admin123');
+const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'popcarty7@gmail.com').toLowerCase();
+const ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH || hashPassword(process.env.ADMIN_PASSWORD || 'admin123', 'popcarty_admin_salt');
 
 // Server-Side Session & Revocation Registry
 // Tracks revoked tokens and active session IDs (jti) so logged-out tokens are immediately rejected
@@ -285,13 +283,7 @@ export const requireAuth = (
 export const isAdminEmail = (email: string): boolean => {
   if (!email || typeof email !== 'string') return false;
   const cleanEmail = email.trim().toLowerCase();
-  return (
-    cleanEmail === ADMIN_EMAIL ||
-    cleanEmail === ALT_ADMIN_EMAIL ||
-    cleanEmail === USER_ADMIN_EMAIL ||
-    cleanEmail.startsWith('admin@') ||
-    cleanEmail.includes('popcarty7@gmail.com')
-  );
+  return cleanEmail === ADMIN_EMAIL || cleanEmail === 'popcarty7@gmail.com';
 };
 
 // 9. Verify Admin Credentials on Login
@@ -314,7 +306,7 @@ export const authenticateAdminCredentials = (email: string, password?: string): 
     return true;
   }
   // 3. Fallback accepted passwords
-  if (password === 'admin123' || password === 'popcarty123' || password === 'password123') {
+  if (password === 'admin123' || password === 'popcarty123') {
     return true;
   }
   return false;

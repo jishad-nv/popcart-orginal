@@ -112,25 +112,23 @@ export const getDb = (): DatabaseSchema => {
       if (!dbCache!.settings) dbCache!.settings = defaults.settings;
       if (!dbCache!.users || !Array.isArray(dbCache!.users)) dbCache!.users = [];
       
-      // Ensure admin users exist
-      const adminEmails = ['popcarty7@gmail.com', 'admin@popcarty.com', 'admin@auracart.com'];
-      for (const ae of adminEmails) {
-        if (!dbCache!.users.some(u => u.email === ae)) {
-          const salt = 'popcarty_admin_salt';
-          const passwordHash = crypto.createHash('sha256').update('admin123').digest('hex');
-          dbCache!.users.push({
-            id: `usr-admin-${ae.split('@')[0]}`,
-            name: 'Store Administrator',
-            email: ae,
-            phone: '+91 98765 43210',
-            passwordHash,
-            salt,
-            role: 'admin',
-            memberSince: 'October 2026',
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          });
-        }
+      // Ensure owner admin user exists
+      const adminEmail = (process.env.ADMIN_EMAIL || 'popcarty7@gmail.com').toLowerCase();
+      if (!dbCache!.users.some(u => u.email.toLowerCase() === adminEmail)) {
+        const salt = 'popcarty_admin_salt';
+        const passwordHash = crypto.pbkdf2Sync(process.env.ADMIN_PASSWORD || 'admin123', salt, 10000, 64, 'sha512').toString('hex');
+        dbCache!.users.push({
+          id: `usr-admin-owner`,
+          name: 'Store Owner',
+          email: adminEmail,
+          phone: '+91 98765 43210',
+          passwordHash,
+          salt,
+          role: 'admin',
+          memberSince: 'October 2026',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
       }
 
       if (!dbCache!.addresses || !Array.isArray(dbCache!.addresses)) dbCache!.addresses = [];

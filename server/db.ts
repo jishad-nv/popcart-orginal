@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { Product, Order, Coupon, StoreSettings } from '../src/types';
+import { FALLBACK_PRODUCTS } from './fallbackProducts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -31,12 +32,6 @@ export interface DatabaseSchema {
   users: StoredUserRecord[];
   addresses: import('../src/types').Address[];
   revokedJtis: string[];
-  adminCredentialsOverride?: {
-    email: string;
-    passwordHash: string;
-    salt: string;
-    updatedAt: string;
-  };
   importAuditLogs: {
     id: string;
     adminEmail: string;
@@ -63,7 +58,7 @@ const ensureDataDir = () => {
 
 const getDefaultSeed = (): DatabaseSchema => {
   return {
-    products: [],
+    products: FALLBACK_PRODUCTS,
     orders: [],
     coupons: [
       {
@@ -525,24 +520,3 @@ export const revokeJtiInDb = (jti: string): void => {
     saveDb(db);
   }
 };
-
-export const getAdminCredentialsOverrideFromDb = (): DatabaseSchema['adminCredentialsOverride'] | undefined => {
-  const db = getDb();
-  return db.adminCredentialsOverride;
-};
-
-export const setAdminCredentialsOverrideInDb = (
-  email: string,
-  passwordHash: string,
-  salt: string
-): void => {
-  const db = getDb();
-  db.adminCredentialsOverride = {
-    email: email.trim().toLowerCase(),
-    passwordHash,
-    salt,
-    updatedAt: new Date().toISOString(),
-  };
-  saveDb(db);
-};
-

@@ -1,23 +1,10 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { useStore } from '../../context/StoreContext';
 import { PopcartyLogo } from './PopcartyLogo';
-import { Truck, ShieldCheck, RefreshCw, Headphones, ArrowRight, Check } from 'lucide-react';
+import { Truck, ShieldCheck, RefreshCw, Headphones } from 'lucide-react';
 
 export const Footer: React.FC = () => {
-  const { navigateTo, categories, settings, addToast } = useStore();
-  const [emailInput, setEmailInput] = useState('');
-  const [subscribed, setSubscribed] = useState(false);
-
-  const handleSubscribe = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!emailInput || !emailInput.includes('@')) {
-      addToast('Invalid Email', 'Please enter a valid email address.', 'error');
-      return;
-    }
-    setSubscribed(true);
-    addToast('Subscribed!', 'You will receive exclusive product drops and coupons.', 'success');
-    setEmailInput('');
-  };
+  const { navigateTo, categories, settings } = useStore();
 
   return (
     <footer className="bg-white border-t border-slate-200 mt-8 sm:mt-12 transition-colors">
@@ -77,29 +64,6 @@ export const Footer: React.FC = () => {
             <p className="text-xs text-slate-500 max-w-sm leading-relaxed">
               Useful home, kitchen and lifestyle products at honest prices, delivered to your doorstep.
             </p>
-
-            {/* Newsletter Subscription */}
-            <div className="pt-2">
-              <span className="text-xs font-semibold text-slate-900 block mb-2">
-                Join our Insider Club (Get 20% Off)
-              </span>
-              <form onSubmit={handleSubscribe} className="flex gap-2 max-w-sm">
-                <input
-                  type="email"
-                  value={emailInput}
-                  onChange={(e) => setEmailInput(e.target.value)}
-                  placeholder="Enter your email address"
-                  className="flex-1 px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500"
-                />
-                <button
-                  type="submit"
-                  className="px-4 py-2 bg-slate-900 hover:bg-violet-700 text-white text-xs font-medium rounded-xl transition-colors shrink-0 flex items-center gap-1 cursor-pointer"
-                >
-                  {subscribed ? <Check className="w-3.5 h-3.5" /> : <ArrowRight className="w-3.5 h-3.5" />}
-                  <span>{subscribed ? 'Joined' : 'Join'}</span>
-                </button>
-              </form>
-            </div>
           </div>
 
           {/* Column 1: Shop Categories */}

@@ -88,38 +88,10 @@ function isQuotaExceededError(error: unknown): boolean {
   );
 }
 
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  if (isQuotaExceededError(error)) {
-    console.warn(`[Firestore] Free-tier daily quota reached for ${operationType} on "${path}". Falling back to cached store data.`);
-    return;
+  // Helper to recursively strip `undefined` properties before writing to Firestore
+  function cleanFirestorePayload<T>(obj: T): T {
+    return JSON.parse(JSON.stringify(obj));
   }
-
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo:
-        auth.currentUser?.providerData.map((provider) => ({
-          providerId: provider.providerId,
-          displayName: provider.displayName,
-          email: provider.email,
-          photoUrl: provider.photoURL,
-        })) || [],
-    },
-    operationType,
-    path,
-  };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-}
-
-// Helper to recursively strip `undefined` properties before writing to Firestore
-function cleanFirestorePayload<T>(obj: T): T {
-  return JSON.parse(JSON.stringify(obj));
-}
 
 export type PageView =
   | 'home'
@@ -344,6 +316,40 @@ const pageToPath = (page: PageView): string => {
 };
 
 export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  // Helper to recursively strip `undefined` properties before writing to Firestore
+  function cleanFirestorePayload<T>(obj: T): T {
+    return JSON.parse(JSON.stringify(obj));
+  }
+
+  function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+    if (isQuotaExceededError(error)) {
+      console.warn(`[Firestore] Free-tier daily quota reached for ${operationType} on "${path}". Falling back to cached store data.`);
+      setIsQuotaExceeded(true);
+      return;
+    }
+
+    const errInfo: FirestoreErrorInfo = {
+      error: error instanceof Error ? error.message : String(error),
+      authInfo: {
+        userId: auth.currentUser?.uid,
+        email: auth.currentUser?.email,
+        emailVerified: auth.currentUser?.emailVerified,
+        isAnonymous: auth.currentUser?.isAnonymous,
+        tenantId: auth.currentUser?.tenantId,
+        providerInfo:
+          auth.currentUser?.providerData.map((provider) => ({
+            providerId: provider.providerId,
+            displayName: provider.displayName,
+            email: provider.email,
+            photoUrl: provider.photoURL,
+          })) || [],
+      },
+      operationType,
+      path,
+    };
+    console.error('Firestore Error: ', JSON.stringify(errInfo));
+  }
+
   // Local storage helper
   const loadStorage = <T,>(key: string, fallback: T): T => {
     try {
@@ -413,6 +419,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Toasts
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [isQuotaExceeded, setIsQuotaExceeded] = useState(false);
 
   const addToast = (title: string, message?: string, type: 'success' | 'info' | 'error' = 'success') => {
     const id = Math.random().toString(36).substring(2, 9);
@@ -798,6 +805,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Product management with Firestore (preserving multiple product images)
   const addProduct = async (newProd: Omit<Product, 'id' | 'slug'>) => {
+    if (isQuotaExceeded) {
+      addToast('Quota Exceeded', 'Store is temporarily in read-only mode.', 'error');
+      return;
+    }
     const id = `prod-${Date.now()}`;
     const slug = newProd.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
     const cleanImages =
@@ -822,6 +833,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const updateProduct = async (id: string, updates: Partial<Product>) => {
+    if (isQuotaExceeded) {
+      addToast('Quota Exceeded', 'Store is temporarily in read-only mode.', 'error');
+      return;
+    }
     const normalizedUpdates =
       Array.isArray(updates.images) && updates.images.filter(Boolean).length > 0
         ? { ...updates, images: updates.images.filter(Boolean) }
@@ -839,6 +854,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const deleteProduct = async (id: string) => {
+    if (isQuotaExceeded) {
+      addToast('Quota Exceeded', 'Store is temporarily in read-only mode.', 'error');
+      return;
+    }
     setProducts((prev) => prev.filter((p) => p.id !== id));
 
     try {
@@ -851,6 +870,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const restockProduct = async (id: string, amount: number = 25) => {
+    if (isQuotaExceeded) {
+      addToast('Quota Exceeded', 'Store is temporarily in read-only mode.', 'error');
+      return;
+    }
     const existing = products.find((p) => p.id === id);
     const newQty = (existing ? existing.stockQuantity : 0) + amount;
     setProducts((prev) =>
@@ -875,6 +898,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const bulkDeleteProducts = async (ids: string[]) => {
+    if (isQuotaExceeded) {
+      addToast('Quota Exceeded', 'Store is temporarily in read-only mode.', 'error');
+      return;
+    }
     const idSet = new Set(ids);
     setProducts((prev) => prev.filter((p) => !idSet.has(p.id)));
 
@@ -895,6 +922,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const bulkUpdateCategory = async (ids: string[], categoryId: string) => {
+    if (isQuotaExceeded) {
+      addToast('Quota Exceeded', 'Store is temporarily in read-only mode.', 'error');
+      return;
+    }
     const idSet = new Set(ids);
     const now = new Date().toISOString();
     setProducts((prev) =>
@@ -918,6 +949,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const bulkUpdateStatus = async (ids: string[], status: 'active' | 'draft' | 'archived') => {
+    if (isQuotaExceeded) {
+      addToast('Quota Exceeded', 'Store is temporarily in read-only mode.', 'error');
+      return;
+    }
     const idSet = new Set(ids);
     const now = new Date().toISOString();
     setProducts((prev) =>
@@ -945,6 +980,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const bulkUpdateMarkup = async (ids: string[], markupType: 'percent' | 'fixed', value: number) => {
+    if (isQuotaExceeded) {
+      addToast('Quota Exceeded', 'Store is temporarily in read-only mode.', 'error');
+      return;
+    }
     const idSet = new Set(ids);
     const now = new Date().toISOString();
     const updatedProductsMap = new Map<string, Partial<Product>>();
@@ -999,6 +1038,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     ids: string[],
     flags: { isTrending?: boolean; isFeatured?: boolean; isNewArrival?: boolean }
   ) => {
+    if (isQuotaExceeded) {
+      addToast('Quota Exceeded', 'Store is temporarily in read-only mode.', 'error');
+      return;
+    }
     const idSet = new Set(ids);
     const now = new Date().toISOString();
     setProducts((prev) =>
@@ -1087,6 +1130,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Reviews
   const addReview = async (productId: string, rating: number, title: string, comment: string) => {
+    if (isQuotaExceeded) {
+      addToast('Quota Exceeded', 'Store is temporarily in read-only mode.', 'error');
+      return;
+    }
     const newRev: Review = {
       id: `rev-${Date.now()}`,
       productId,
@@ -1268,6 +1315,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const addCoupon = async (newCoupon: Omit<Coupon, 'id' | 'usageCount'>) => {
+    if (isQuotaExceeded) {
+      addToast('Quota Exceeded', 'Store is temporarily in read-only mode.', 'error');
+      return;
+    }
     const id = `coupon-${Date.now()}`;
     const fullCoupon: Coupon = {
       ...newCoupon,
@@ -1286,6 +1337,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const deleteCoupon = async (id: string) => {
+    if (isQuotaExceeded) {
+      addToast('Quota Exceeded', 'Store is temporarily in read-only mode.', 'error');
+      return;
+    }
     setCoupons((prev) => prev.filter((c) => c.id !== id));
     if (appliedCoupon?.id === id) {
       setAppliedCoupon(null);

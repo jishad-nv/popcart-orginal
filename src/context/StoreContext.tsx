@@ -29,8 +29,9 @@ import { onAuthStateChanged, signInWithEmailAndPassword, signOut, createUserWith
 import {
   collection,
   getDocs,
+  getDocsFromCache,
   getDoc,
-  getDocFromServer,
+  getDocFromCache,
   doc,
   setDoc,
   updateDoc,
@@ -67,7 +68,24 @@ interface FirestoreErrorInfo {
   };
 }
 
+function isQuotaExceededError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error || '');
+  const code = (error as any)?.code || '';
+  return (
+    code === 'resource-exhausted' ||
+    msg.includes('Quota limit exceeded') ||
+    msg.includes('Quota exceeded') ||
+    msg.includes('resource-exhausted')
+  );
+}
+
 function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  if (isQuotaExceededError(error)) {
+    // Gracefully fallback to local/cached state when Firebase free tier daily read quota is exhausted
+    console.warn(`[Firestore] Free-tier daily quota reached for ${operationType} on "${path}". Using cached store data.`);
+    return;
+  }
+
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
@@ -257,6 +275,7 @@ const StoreContext = createContext<StoreContextType | undefined>(undefined);
 
 const STORAGE_KEYS = {
   PRODUCTS: 'auracart_products_v3',
+  PRODUCTS_SYNC_AT: 'auracart_products_sync_at_v1',
   CATEGORIES: 'auracart_categories_v4',
   CART: 'auracart_cart_v3',
   WISHLIST: 'auracart_wishlist_v3',
@@ -417,20 +436,6 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   );
   const [reviews, setReviews] = useState<Review[]>(() => loadStorage(STORAGE_KEYS.REVIEWS, INITIAL_REVIEWS));
 
-  // Validate connection to Firestore on boot
-  useEffect(() => {
-    async function testConnection() {
-      try {
-        await getDocFromServer(doc(db, 'settings', 'storefront'));
-      } catch (error) {
-        if (error instanceof Error && error.message.includes('the client is offline')) {
-          console.error('Please check your Firebase configuration.');
-        }
-      }
-    }
-    testConnection();
-  }, []);
-
   // Firebase Auth, Products & Settings Sync on Mount
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -483,8 +488,33 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
 
     const loadFirestoreProducts = async () => {
+      const productsCol = collection(db, 'products');
+
+      // 1. First try reading from persistent IndexedDB Firestore cache (0 daily read quota consumed)
       try {
-        const querySnapshot = await getDocs(collection(db, 'products'));
+        const cachedSnap = await getDocsFromCache(productsCol);
+        if (!cachedSnap.empty) {
+          const cachedProds: Product[] = [];
+          cachedSnap.forEach((docSnap) => {
+            cachedProds.push(docSnap.data() as Product);
+          });
+          if (cachedProds.length > 0) {
+            setProducts(cachedProds);
+            const lastSync = Number(localStorage.getItem(STORAGE_KEYS.PRODUCTS_SYNC_AT) || 0);
+            const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+            // Skip full-collection server read if synced within the last 6 hours
+            if (Date.now() - lastSync < SIX_HOURS_MS) {
+              return;
+            }
+          }
+        }
+      } catch {
+        // Cache miss or unavailable; fall through to network fetch
+      }
+
+      // 2. Fetch from Firestore server if cache was empty or stale
+      try {
+        const querySnapshot = await getDocs(productsCol);
         if (!querySnapshot.empty) {
           const prods: Product[] = [];
           querySnapshot.forEach((docSnap) => {
@@ -492,14 +522,12 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           });
           if (prods.length > 0) {
             setProducts(prods);
-          }
-        } else {
-          for (const p of INITIAL_PRODUCTS) {
             try {
-              await setDoc(doc(db, 'products', p.id), p);
+              localStorage.setItem(STORAGE_KEYS.PRODUCTS_SYNC_AT, String(Date.now()));
             } catch {}
           }
-          setProducts(INITIAL_PRODUCTS);
+        } else {
+          setProducts((prev) => (prev.length > 0 ? prev : INITIAL_PRODUCTS));
         }
       } catch (err) {
         handleFirestoreError(err, OperationType.LIST, 'products');
@@ -507,8 +535,26 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
 
     const loadFirestoreSettings = async () => {
+      const settingsRef = doc(db, 'settings', 'storefront');
       try {
-        const snap = await getDoc(doc(db, 'settings', 'storefront'));
+        const cachedSnap = await getDocFromCache(settingsRef).catch(() => null);
+        if (cachedSnap && cachedSnap.exists()) {
+          const cachedData = cachedSnap.data() as Partial<StoreSettings>;
+          setSettings((prev) => ({
+            ...prev,
+            ...cachedData,
+            announcementBar: {
+              ...prev.announcementBar,
+              ...(cachedData.announcementBar || {}),
+            },
+            homepageConfig: {
+              ...(prev.homepageConfig || {}),
+              ...(cachedData.homepageConfig || {}),
+            },
+          }));
+        }
+
+        const snap = await getDoc(settingsRef);
         if (snap.exists()) {
           const data = snap.data() as Partial<StoreSettings>;
           setSettings((prev) => ({
@@ -525,7 +571,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           }));
         }
       } catch {
-        // Fallback to local settings
+        // Fallback to local settings when quota is reached or offline
       }
     };
 
@@ -1501,7 +1547,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       await setDoc(doc(db, 'orders', orderNumber), cleanFirestorePayload(newOrder));
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, `orders/${orderNumber}`);
-      throw error;
+      if (!isQuotaExceededError(error)) {
+        throw error;
+      }
     }
 
     // Deduct stock locally

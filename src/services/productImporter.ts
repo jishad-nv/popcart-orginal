@@ -51,7 +51,12 @@ export const getFirestoreProductCount = async (): Promise<number> => {
     const snapshot = await getCountFromServer(collection(db, 'products'));
     return snapshot.data().count;
   } catch {
-    return 0;
+    try {
+      const snap = await getDocs(collection(db, 'products'));
+      return snap.size;
+    } catch {
+      return 0;
+    }
   }
 };
 

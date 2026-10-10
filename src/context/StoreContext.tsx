@@ -7,8 +7,6 @@ import {
   Address,
   Order,
   OrderStatus,
-  PaymentMethodType,
-  PaymentStatusType,
   Coupon,
   StoreSettings,
   NotificationItem,
@@ -26,90 +24,7 @@ import {
 import { AUTH_TOKEN_KEY, clearStoredAuthToken } from '../services/productImporter';
 import { auth, db } from '../services/firebase';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut, createUserWithEmailAndPassword } from 'firebase/auth';
-import {
-  collection,
-  getDocs,
-  getDocsFromCache,
-  getDoc,
-  getDocFromCache,
-  doc,
-  setDoc,
-  updateDoc,
-  deleteDoc,
-  onSnapshot,
-  query,
-  where,
-  writeBatch,
-} from 'firebase/firestore';
-
-enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
-}
-
-interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId?: string | null;
-    email?: string | null;
-    emailVerified?: boolean | null;
-    isAnonymous?: boolean | null;
-    tenantId?: string | null;
-    providerInfo?: {
-      providerId?: string | null;
-      email?: string | null;
-    }[];
-  };
-}
-
-function isQuotaExceededError(error: unknown): boolean {
-  const msg = error instanceof Error ? error.message : String(error || '');
-  const code = (error as any)?.code || '';
-  return (
-    code === 'resource-exhausted' ||
-    msg.includes('Quota limit exceeded') ||
-    msg.includes('Quota exceeded') ||
-    msg.includes('resource-exhausted')
-  );
-}
-
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  if (isQuotaExceededError(error)) {
-    // Gracefully fallback to local/cached state when Firebase free tier daily read quota is exhausted
-    console.warn(`[Firestore] Free-tier daily quota reached for ${operationType} on "${path}". Using cached store data.`);
-    return;
-  }
-
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo:
-        auth.currentUser?.providerData?.map((provider) => ({
-          providerId: provider.providerId,
-          email: provider.email,
-        })) || [],
-    },
-    operationType,
-    path,
-  };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-}
-
-// Helper to recursively strip `undefined` properties before writing to Firestore
-function cleanFirestorePayload<T>(obj: T): T {
-  return JSON.parse(JSON.stringify(obj));
-}
+import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 
 export type PageView =
   | 'home'
@@ -167,10 +82,6 @@ interface StoreContextType {
   bulkUpdateCategory: (ids: string[], categoryId: string) => void;
   bulkUpdateStatus: (ids: string[], status: 'active' | 'draft' | 'archived') => void;
   bulkUpdateMarkup: (ids: string[], markupType: 'percent' | 'fixed', value: number) => void;
-  bulkUpdateFlags: (
-    ids: string[],
-    flags: { isTrending?: boolean; isFeatured?: boolean; isNewArrival?: boolean }
-  ) => void;
   importProducts: (
     newProducts: (Omit<Product, 'id' | 'slug'> & { id?: string; slug?: string })[]
   ) => { imported: number; updated: number };
@@ -183,7 +94,7 @@ interface StoreContextType {
 
   // Cart
   cart: CartItem[];
-  addToCart: (product: Product, quantity?: number, color?: string, size?: string, variantTitle?: string) => void;
+  addToCart: (product: Product, quantity?: number, color?: string) => void;
   updateCartQty: (productId: string, quantity: number, color?: string) => void;
   removeFromCart: (productId: string, color?: string) => void;
   clearCart: () => void;
@@ -219,28 +130,15 @@ interface StoreContextType {
   logout: () => Promise<boolean>;
   updateProfile: (name: string, email: string, phone: string) => void;
   addresses: Address[];
-  addAddress: (addr: Omit<Address, 'id' | 'userId'>) => Address;
+  addAddress: (addr: Omit<Address, 'id' | 'userId'>) => void;
   updateAddress: (id: string, updates: Partial<Address>) => void;
   deleteAddress: (id: string) => void;
   setDefaultAddress: (id: string) => void;
 
   // Orders
   orders: Order[];
-  createOrder: (orderData: {
-    shippingAddress: Address;
-    shippingMethod: 'standard';
-    paymentMethod: PaymentMethodType;
-  }) => Promise<Order>;
-  updateOrderStatus: (orderId: string, status: OrderStatus, note?: string) => Promise<void>;
-  updateOrderMetadata: (
-    orderId: string,
-    updates: {
-      paymentStatus?: PaymentStatusType;
-      trackingNumber?: string;
-      courierName?: string;
-      adminNotes?: string;
-    }
-  ) => Promise<void>;
+  registerPaidOrder: (order: Order) => void;
+  updateOrderStatus: (orderId: string, status: OrderStatus, note?: string) => void;
   userOrders: Order[];
   getOrderById: (orderId: string) => Order | undefined;
 
@@ -275,7 +173,6 @@ const StoreContext = createContext<StoreContextType | undefined>(undefined);
 
 const STORAGE_KEYS = {
   PRODUCTS: 'auracart_products_v3',
-  PRODUCTS_SYNC_AT: 'auracart_products_sync_at_v1',
   CATEGORIES: 'auracart_categories_v4',
   CART: 'auracart_cart_v3',
   WISHLIST: 'auracart_wishlist_v3',
@@ -333,6 +230,10 @@ const pageToPath = (page: PageView): string => {
   return `/${page}`;
 };
 
+const isProtectedPage = (page: PageView): boolean => {
+  return page === 'profile' || page === 'admin';
+};
+
 export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // Local storage helper
   const loadStorage = <T,>(key: string, fallback: T): T => {
@@ -356,11 +257,12 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
-  // Strict Initial Auth State
+  // Strict Initial Auth State: Requires BOTH a stored token and user record; never defaults to a mock user
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     try {
+      const token = localStorage.getItem(AUTH_TOKEN_KEY);
       const savedUser = localStorage.getItem(STORAGE_KEYS.USER);
-      if (!savedUser || savedUser === 'null' || savedUser === 'undefined') {
+      if (!token || token === 'null' || token === 'undefined' || !savedUser || savedUser === 'null') {
         return null;
       }
       const parsed = JSON.parse(savedUser);
@@ -385,7 +287,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return 'home';
     }
     if (initialTarget === 'admin' && (!currentUser || currentUser.role !== 'admin')) {
-      return 'admin';
+      return 'admin'; // AdminDashboard renders restricted access view or redirects
     }
     return initialTarget;
   });
@@ -425,7 +327,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [cart, setCart] = useState<CartItem[]>(() => loadStorage(STORAGE_KEYS.CART, []));
   const [wishlistIds, setWishlistIds] = useState<string[]>(() => loadStorage(STORAGE_KEYS.WISHLIST, []));
   const [addresses, setAddresses] = useState<Address[]>(() =>
-    currentUser ? loadStorage(`${STORAGE_KEYS.ADDRESSES}_${currentUser.id}`, loadStorage(STORAGE_KEYS.ADDRESSES, INITIAL_ADDRESSES)) : []
+    currentUser ? loadStorage(STORAGE_KEYS.ADDRESSES, INITIAL_ADDRESSES) : []
   );
   const [orders, setOrders] = useState<Order[]>(() => loadStorage(STORAGE_KEYS.ORDERS, []));
   const [coupons, setCoupons] = useState<Coupon[]>(() => loadStorage(STORAGE_KEYS.COUPONS, INITIAL_COUPONS));
@@ -436,7 +338,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   );
   const [reviews, setReviews] = useState<Review[]>(() => loadStorage(STORAGE_KEYS.REVIEWS, INITIAL_REVIEWS));
 
-  // Firebase Auth, Products & Settings Sync on Mount
+  // Firebase Auth and Firestore Sync on Mount
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const target = pathToPage(window.location.pathname);
@@ -451,19 +353,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (firebaseUser) {
         const userEmail = (firebaseUser.email || '').toLowerCase();
         const isAdminUser = userEmail === 'popcarty7@gmail.com';
-        // Preserve user's locally saved name/phone if they updated their profile
-        const existingLocal = loadStorage<User | null>(STORAGE_KEYS.USER, null);
         const user: User = {
           id: firebaseUser.uid,
-          name:
-            firebaseUser.displayName ||
-            (existingLocal?.id === firebaseUser.uid ? existingLocal.name : '') ||
-            (isAdminUser ? 'Store Administrator' : 'Popcarty Customer'),
+          name: firebaseUser.displayName || (isAdminUser ? 'Store Administrator' : 'Popcarty Customer'),
           email: userEmail,
-          phone:
-            firebaseUser.phoneNumber ||
-            (existingLocal?.id === firebaseUser.uid ? existingLocal.phone : '') ||
-            '',
+          phone: firebaseUser.phoneNumber || '',
           role: isAdminUser ? 'admin' : 'customer',
           memberSince: 'October 2026',
           avatar: isAdminUser
@@ -473,13 +367,6 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         currentUserRef.current = user;
         setCurrentUser(user);
         safeSetStorage(STORAGE_KEYS.USER, user);
-
-        // Load user-specific saved addresses
-        const userAddrs = loadStorage<Address[]>(
-          `${STORAGE_KEYS.ADDRESSES}_${user.id}`,
-          loadStorage(STORAGE_KEYS.ADDRESSES, [])
-        );
-        setAddresses(Array.isArray(userAddrs) ? userAddrs : []);
       } else {
         currentUserRef.current = null;
         setCurrentUser(null);
@@ -488,33 +375,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
 
     const loadFirestoreProducts = async () => {
-      const productsCol = collection(db, 'products');
-
-      // 1. First try reading from persistent IndexedDB Firestore cache (0 daily read quota consumed)
       try {
-        const cachedSnap = await getDocsFromCache(productsCol);
-        if (!cachedSnap.empty) {
-          const cachedProds: Product[] = [];
-          cachedSnap.forEach((docSnap) => {
-            cachedProds.push(docSnap.data() as Product);
-          });
-          if (cachedProds.length > 0) {
-            setProducts(cachedProds);
-            const lastSync = Number(localStorage.getItem(STORAGE_KEYS.PRODUCTS_SYNC_AT) || 0);
-            const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
-            // Skip full-collection server read if synced within the last 6 hours
-            if (Date.now() - lastSync < SIX_HOURS_MS) {
-              return;
-            }
-          }
-        }
-      } catch {
-        // Cache miss or unavailable; fall through to network fetch
-      }
-
-      // 2. Fetch from Firestore server if cache was empty or stale
-      try {
-        const querySnapshot = await getDocs(productsCol);
+        const querySnapshot = await getDocs(collection(db, 'products'));
         if (!querySnapshot.empty) {
           const prods: Product[] = [];
           querySnapshot.forEach((docSnap) => {
@@ -522,125 +384,31 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           });
           if (prods.length > 0) {
             setProducts(prods);
-            try {
-              localStorage.setItem(STORAGE_KEYS.PRODUCTS_SYNC_AT, String(Date.now()));
-            } catch {}
           }
         } else {
-          setProducts((prev) => (prev.length > 0 ? prev : INITIAL_PRODUCTS));
-        }
-      } catch (err) {
-        handleFirestoreError(err, OperationType.LIST, 'products');
-      }
-    };
-
-    const loadFirestoreSettings = async () => {
-      const settingsRef = doc(db, 'settings', 'storefront');
-      try {
-        const cachedSnap = await getDocFromCache(settingsRef).catch(() => null);
-        if (cachedSnap && cachedSnap.exists()) {
-          const cachedData = cachedSnap.data() as Partial<StoreSettings>;
-          setSettings((prev) => ({
-            ...prev,
-            ...cachedData,
-            announcementBar: {
-              ...prev.announcementBar,
-              ...(cachedData.announcementBar || {}),
-            },
-            homepageConfig: {
-              ...(prev.homepageConfig || {}),
-              ...(cachedData.homepageConfig || {}),
-            },
-          }));
-        }
-
-        const snap = await getDoc(settingsRef);
-        if (snap.exists()) {
-          const data = snap.data() as Partial<StoreSettings>;
-          setSettings((prev) => ({
-            ...prev,
-            ...data,
-            announcementBar: {
-              ...prev.announcementBar,
-              ...(data.announcementBar || {}),
-            },
-            homepageConfig: {
-              ...(prev.homepageConfig || {}),
-              ...(data.homepageConfig || {}),
-            },
-          }));
+          // Auto-seed initial products into Firestore if empty
+          for (const p of INITIAL_PRODUCTS) {
+            try {
+              await setDoc(doc(db, 'products', p.id), p);
+            } catch {}
+          }
+          setProducts(INITIAL_PRODUCTS);
         }
       } catch {
-        // Fallback to local settings when quota is reached or offline
+        // Fallback to local products
       }
     };
 
     loadFirestoreProducts();
-    loadFirestoreSettings();
     return () => unsubAuth();
   }, []);
-
-  // Real-time Orders Listener from Firestore "orders" collection
-  useEffect(() => {
-    if (!currentUser) {
-      return;
-    }
-
-    const ordersRef = collection(db, 'orders');
-    const q =
-      currentUser.role === 'admin'
-        ? ordersRef
-        : query(ordersRef, where('userId', '==', currentUser.id));
-
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        const fetchedOrders: Order[] = [];
-        snapshot.forEach((docSnap) => {
-          const data = docSnap.data() as Order;
-          if (data && data.orderNumber) {
-            fetchedOrders.push({
-              ...data,
-              id: data.id || docSnap.id,
-            });
-          }
-        });
-
-        // Sort newest first by createdAt
-        fetchedOrders.sort(
-          (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
-        );
-
-        setOrders((prev) => {
-          // Merge any local orders that might not yet be synced
-          const map = new Map<string, Order>();
-          fetchedOrders.forEach((o) => map.set(o.orderNumber, o));
-          prev.forEach((o) => {
-            if (!map.has(o.orderNumber)) {
-              if (currentUser.role === 'admin' || o.userId === currentUser.id) {
-                map.set(o.orderNumber, o);
-              }
-            }
-          });
-          const merged = Array.from(map.values()).sort(
-            (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
-          );
-          return merged;
-        });
-      },
-      (error) => {
-        handleFirestoreError(error, OperationType.LIST, 'orders');
-      }
-    );
-
-    return () => unsubscribe();
-  }, [currentUser?.id, currentUser?.role]);
 
   // Browser Back / Forward (popstate) route protection
   useEffect(() => {
     const handlePopState = (event: PopStateEvent) => {
       const targetPage: PageView = event.state?.page || pathToPage(window.location.pathname);
 
+      // Prevent logged-out user from pressing Back to access protected pages
       if (targetPage === 'profile' && !currentUserRef.current) {
         window.history.replaceState({ page: 'home' }, '', '/');
         setCurrentPage('home');
@@ -664,6 +432,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Sync to local storage on changes
   useEffect(() => {
+    // Only cache up to 100 items in localStorage to avoid browser quota limits
     safeSetStorage(STORAGE_KEYS.PRODUCTS, products.slice(0, 100));
   }, [products]);
 
@@ -686,16 +455,21 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       } else {
         localStorage.removeItem(STORAGE_KEYS.USER);
       }
-    } catch {}
+    } catch {
+      // ignore storage errors
+    }
   }, [currentUser]);
 
   useEffect(() => {
     try {
       if (currentUser) {
-        localStorage.setItem(`${STORAGE_KEYS.ADDRESSES}_${currentUser.id}`, JSON.stringify(addresses));
         localStorage.setItem(STORAGE_KEYS.ADDRESSES, JSON.stringify(addresses));
+      } else {
+        localStorage.removeItem(STORAGE_KEYS.ADDRESSES);
       }
-    } catch {}
+    } catch {
+      // ignore storage errors
+    }
   }, [addresses, currentUser]);
 
   useEffect(() => {
@@ -729,12 +503,15 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       replace?: boolean;
     }
   ) => {
+    // Route protection for Profile when logged out
     if (page === 'profile' && !currentUserRef.current) {
       setAuthModalOpen(true);
       setCurrentPage('home');
       try {
         window.history.replaceState({ page: 'home' }, '', '/');
-      } catch {}
+      } catch {
+        // ignore history error
+      }
       return;
     }
 
@@ -762,7 +539,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       } else if (window.location.pathname !== targetPath) {
         window.history.pushState({ page }, '', targetPath);
       }
-    } catch {}
+    } catch {
+      // ignore history errors
+    }
 
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -776,46 +555,45 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return `₹${amount.toLocaleString('en-IN')}`;
   };
 
-  // Product management with Firestore (preserving multiple product images)
+  // Product management with Firestore
   const addProduct = async (newProd: Omit<Product, 'id' | 'slug'>) => {
     const id = `prod-${Date.now()}`;
     const slug = newProd.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    const cleanImages =
-      Array.isArray(newProd.images) && newProd.images.filter(Boolean).length > 0
-        ? newProd.images.filter(Boolean)
-        : ['https://images.unsplash.com/photo-1590658268037-6bf12165a8df?w=800&auto=format&fit=crop&q=80'];
+    const primaryImage =
+      Array.isArray(newProd.images) && newProd.images.length > 0
+        ? newProd.images[0]
+        : 'https://images.unsplash.com/photo-1590658268037-6bf12165a8df?w=800&auto=format&fit=crop&q=80';
     const fullProduct: Product = {
       ...newProd,
-      images: cleanImages,
+      images: [primaryImage],
       id,
       slug,
     };
     setProducts((prev) => [fullProduct, ...prev]);
 
     try {
-      await setDoc(doc(db, 'products', id), cleanFirestorePayload(fullProduct));
+      await setDoc(doc(db, 'products', id), fullProduct);
     } catch (e) {
-      handleFirestoreError(e, OperationType.CREATE, `products/${id}`);
+      console.error(e);
     }
 
     addToast('Product Added', `${fullProduct.name} has been added to catalog.`, 'success');
   };
 
   const updateProduct = async (id: string, updates: Partial<Product>) => {
-    const normalizedUpdates =
-      Array.isArray(updates.images) && updates.images.filter(Boolean).length > 0
-        ? { ...updates, images: updates.images.filter(Boolean) }
-        : updates;
+    const normalizedUpdates = updates.images?.length
+      ? { ...updates, images: [updates.images[0]] }
+      : updates;
 
     setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, ...normalizedUpdates } : p)));
 
     try {
-      await updateDoc(doc(db, 'products', id), cleanFirestorePayload(normalizedUpdates));
+      await updateDoc(doc(db, 'products', id), normalizedUpdates);
     } catch (e) {
-      handleFirestoreError(e, OperationType.UPDATE, `products/${id}`);
+      console.error(e);
     }
 
-    addToast('Product Updated', 'Changes saved to Firestore.', 'success');
+    addToast('Product Updated', 'Changes saved successfully.', 'success');
   };
 
   const deleteProduct = async (id: string) => {
@@ -824,27 +602,27 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     try {
       await deleteDoc(doc(db, 'products', id));
     } catch (e) {
-      handleFirestoreError(e, OperationType.DELETE, `products/${id}`);
+      console.error(e);
     }
 
     addToast('Product Deleted', 'Item removed from store.', 'info');
   };
 
-  const restockProduct = async (id: string, amount: number = 25) => {
+  const restockProduct = (id: string, amount: number = 25) => {
     const existing = products.find((p) => p.id === id);
     const newQty = (existing ? existing.stockQuantity : 0) + amount;
     setProducts((prev) =>
       prev.map((p) => (p.id === id ? { ...p, stockQuantity: p.stockQuantity + amount, inStock: true } : p))
     );
 
-    try {
-      await updateDoc(doc(db, 'products', id), {
-        stockQuantity: newQty,
-        inStock: true,
-        updatedAt: new Date().toISOString(),
-      });
-    } catch (e) {
-      handleFirestoreError(e, OperationType.UPDATE, `products/${id}`);
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (token) {
+      fetch(`/api/products/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        credentials: 'include',
+        body: JSON.stringify({ stockQuantity: newQty, inStock: true }),
+      }).catch(() => {});
     }
 
     addToast('Stock Replenished', `Added +${amount} units to inventory.`, 'success');
@@ -854,151 +632,101 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return products.find((p) => p.id === id);
   };
 
-  const bulkDeleteProducts = async (ids: string[]) => {
+  const bulkDeleteProducts = (ids: string[]) => {
     const idSet = new Set(ids);
     setProducts((prev) => prev.filter((p) => !idSet.has(p.id)));
 
-    try {
-      const chunkSize = 400;
-      for (let i = 0; i < ids.length; i += chunkSize) {
-        const batch = writeBatch(db);
-        ids.slice(i, i + chunkSize).forEach((id) => {
-          batch.delete(doc(db, 'products', id));
-        });
-        await batch.commit();
-      }
-    } catch (e) {
-      handleFirestoreError(e, OperationType.DELETE, 'products/bulk');
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (token) {
+      fetch('/api/products/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        credentials: 'include',
+        body: JSON.stringify({ ids }),
+      }).catch(() => {});
     }
 
     addToast('Bulk Deleted', `Removed ${ids.length} products from store.`, 'info');
   };
 
-  const bulkUpdateCategory = async (ids: string[], categoryId: string) => {
+  const bulkUpdateCategory = (ids: string[], categoryId: string) => {
     const idSet = new Set(ids);
-    const now = new Date().toISOString();
     setProducts((prev) =>
-      prev.map((p) => (idSet.has(p.id) ? { ...p, categoryId, updatedAt: now } : p))
+      prev.map((p) => (idSet.has(p.id) ? { ...p, categoryId, updatedAt: new Date().toISOString() } : p))
     );
 
-    try {
-      const chunkSize = 400;
-      for (let i = 0; i < ids.length; i += chunkSize) {
-        const batch = writeBatch(db);
-        ids.slice(i, i + chunkSize).forEach((id) => {
-          batch.update(doc(db, 'products', id), { categoryId, updatedAt: now });
-        });
-        await batch.commit();
-      }
-    } catch (e) {
-      handleFirestoreError(e, OperationType.UPDATE, 'products/bulk-category');
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (token) {
+      fetch('/api/products/bulk-update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        credentials: 'include',
+        body: JSON.stringify({ ids, updates: { categoryId } }),
+      }).catch(() => {});
     }
 
     addToast('Category Updated', `Updated category for ${ids.length} products.`, 'success');
   };
 
-  const bulkUpdateStatus = async (ids: string[], status: 'active' | 'draft' | 'archived') => {
+  const bulkUpdateStatus = (ids: string[], status: 'active' | 'draft' | 'archived') => {
     const idSet = new Set(ids);
-    const now = new Date().toISOString();
     setProducts((prev) =>
       prev.map((p) =>
         idSet.has(p.id)
-          ? { ...p, status, inStock: status === 'active' && p.stockQuantity > 0, updatedAt: now }
+          ? { ...p, status, inStock: status === 'active' && p.stockQuantity > 0, updatedAt: new Date().toISOString() }
           : p
       )
     );
 
-    try {
-      const chunkSize = 400;
-      for (let i = 0; i < ids.length; i += chunkSize) {
-        const batch = writeBatch(db);
-        ids.slice(i, i + chunkSize).forEach((id) => {
-          batch.update(doc(db, 'products', id), { status, updatedAt: now });
-        });
-        await batch.commit();
-      }
-    } catch (e) {
-      handleFirestoreError(e, OperationType.UPDATE, 'products/bulk-status');
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (token) {
+      fetch('/api/products/bulk-update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        credentials: 'include',
+        body: JSON.stringify({ ids, updates: { status } }),
+      }).catch(() => {});
     }
 
     addToast('Status Updated', `Updated status to ${status} for ${ids.length} products.`, 'success');
   };
 
-  const bulkUpdateMarkup = async (ids: string[], markupType: 'percent' | 'fixed', value: number) => {
+  const bulkUpdateMarkup = (ids: string[], markupType: 'percent' | 'fixed', value: number) => {
     const idSet = new Set(ids);
-    const now = new Date().toISOString();
-    const updatedProductsMap = new Map<string, Partial<Product>>();
-
     setProducts((prev) =>
       prev.map((p) => {
         if (!idSet.has(p.id)) return p;
         const cost = p.costPrice || p.price;
-        const rawSellingPrice = markupType === 'percent' ? Math.round(cost * (1 + value / 100)) : cost + value;
-        const newSellingPrice = Math.max(9, Math.round(rawSellingPrice / 10) * 10 - 1);
+        const newSellingPrice = markupType === 'percent' ? Math.round(cost * (1 + value / 100)) : cost + value;
         const profitAmount = newSellingPrice - cost;
         const profitPercentage = cost > 0 ? Math.round((profitAmount / cost) * 100) : 0;
         const originalPrice = Math.max(newSellingPrice, p.originalPrice);
         const discountPercent =
           originalPrice > newSellingPrice ? Math.round(((originalPrice - newSellingPrice) / originalPrice) * 100) : 0;
 
-        const patch: Partial<Product> = {
+        return {
+          ...p,
           price: newSellingPrice,
           profitAmount,
           profitPercentage,
           originalPrice,
           discountPercent,
-          updatedAt: now,
-        };
-        updatedProductsMap.set(p.id, patch);
-
-        return {
-          ...p,
-          ...patch,
+          updatedAt: new Date().toISOString(),
         };
       })
     );
 
-    try {
-      const entries = Array.from(updatedProductsMap.entries());
-      const chunkSize = 400;
-      for (let i = 0; i < entries.length; i += chunkSize) {
-        const batch = writeBatch(db);
-        entries.slice(i, i + chunkSize).forEach(([id, patch]) => {
-          batch.update(doc(db, 'products', id), patch);
-        });
-        await batch.commit();
-      }
-    } catch (e) {
-      handleFirestoreError(e, OperationType.UPDATE, 'products/bulk-markup');
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (token) {
+      fetch('/api/products/bulk-update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        credentials: 'include',
+        body: JSON.stringify({ ids, updates: { markupType, markupValue: value } }),
+      }).catch(() => {});
     }
 
     addToast('Prices Updated', `Adjusted profit markup for ${ids.length} products.`, 'success');
-  };
-
-  const bulkUpdateFlags = async (
-    ids: string[],
-    flags: { isTrending?: boolean; isFeatured?: boolean; isNewArrival?: boolean }
-  ) => {
-    const idSet = new Set(ids);
-    const now = new Date().toISOString();
-    setProducts((prev) =>
-      prev.map((p) => (idSet.has(p.id) ? { ...p, ...flags, updatedAt: now } : p))
-    );
-
-    try {
-      const chunkSize = 400;
-      for (let i = 0; i < ids.length; i += chunkSize) {
-        const batch = writeBatch(db);
-        ids.slice(i, i + chunkSize).forEach((id) => {
-          batch.update(doc(db, 'products', id), cleanFirestorePayload({ ...flags, updatedAt: now }));
-        });
-        await batch.commit();
-      }
-    } catch (e) {
-      handleFirestoreError(e, OperationType.UPDATE, 'products/bulk-flags');
-    }
-
-    addToast('Homepage Placement Updated', `Updated ${ids.length} products.`, 'success');
   };
 
   const importProducts = (newProductsList: (Omit<Product, 'id' | 'slug'> & { id?: string; slug?: string })[]) => {
@@ -1008,10 +736,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setProducts((prev) => {
       const updated = [...prev];
       newProductsList.forEach((item) => {
-        const cleanImages =
-          Array.isArray(item.images) && item.images.filter(Boolean).length > 0
-            ? item.images.filter(Boolean)
-            : ['https://images.unsplash.com/photo-1590658268037-6bf12165a8df?w=800&auto=format&fit=crop&q=80'];
+        const primaryImg =
+          Array.isArray(item.images) && item.images.length > 0
+            ? item.images[0]
+            : 'https://images.unsplash.com/photo-1590658268037-6bf12165a8df?w=800&auto=format&fit=crop&q=80';
 
         const existingIdx = updated.findIndex(
           (p) =>
@@ -1021,22 +749,13 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         );
 
         if (existingIdx >= 0) {
-          const existing = updated[existingIdx];
-          updated[existingIdx] = {
-            ...existing,
-            ...item,
-            images: cleanImages,
-            id: existing.id,
-            slug: existing.slug,
-            updatedAt: new Date().toISOString(),
-          };
           updatedCount++;
         } else {
           const id = item.id || `prod-imp-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
           const slug = item.slug || item.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
           updated.unshift({
             ...item,
-            images: cleanImages,
+            images: [primaryImg],
             id,
             slug,
             createdAt: item.createdAt || new Date().toISOString(),
@@ -1050,7 +769,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     addToast(
       'Import Complete',
-      `Imported ${importedCount} new items (${updatedCount} updated in store).`,
+      `Imported ${importedCount} new items (${updatedCount} already in store).`,
       'success'
     );
 
@@ -1058,6 +777,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const resetToDefaultCatalog = () => {
+    // Protect imported production products — never wipe imported items
     setProducts((prev) => {
       const importedOnly = prev.filter((p) => p.isImported || p.sourceProductId);
       return importedOnly.length > 0 ? importedOnly : INITIAL_PRODUCTS;
@@ -1066,7 +786,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   // Reviews
-  const addReview = async (productId: string, rating: number, title: string, comment: string) => {
+  const addReview = (productId: string, rating: number, title: string, comment: string) => {
     const newRev: Review = {
       id: `rev-${Date.now()}`,
       productId,
@@ -1074,14 +794,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       rating,
       title,
       comment,
-      date: new Date().toLocaleDateString(),
+      date: 'Just now',
       verifiedPurchase: true,
     };
     setReviews((prev) => [newRev, ...prev]);
-
-    try {
-      await setDoc(doc(db, 'reviews', newRev.id), cleanFirestorePayload(newRev));
-    } catch {}
 
     const prodReviews = reviews.filter((r) => r.productId === productId).concat(newRev);
     const avg = prodReviews.reduce((sum, r) => sum + r.rating, 0) / prodReviews.length;
@@ -1100,20 +816,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   // Cart operations
-  const addToCart = (
-    product: Product,
-    quantity = 1,
-    color?: string,
-    size?: string,
-    variantTitle?: string
-  ) => {
+  const addToCart = (product: Product, quantity = 1, color?: string) => {
     setCart((prev) => {
-      const targetColor = color || product.colors?.[0]?.name;
       const existingIndex = prev.findIndex(
-        (item) =>
-          item.productId === product.id &&
-          item.selectedColor === targetColor &&
-          item.selectedSize === size
+        (item) => item.productId === product.id && item.selectedColor === color
       );
       if (existingIndex > -1) {
         const updated = [...prev];
@@ -1125,9 +831,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         {
           productId: product.id,
           product,
-          selectedColor: targetColor,
-          selectedSize: size,
-          selectedVariantTitle: variantTitle || product.variants?.[0]?.title,
+          selectedColor: color || product.colors?.[0]?.name,
           quantity,
         },
       ];
@@ -1245,7 +949,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     addToast('Coupon Removed', 'Promo code removed from cart.', 'info');
   };
 
-  const addCoupon = async (newCoupon: Omit<Coupon, 'id' | 'usageCount'>) => {
+  const addCoupon = (newCoupon: Omit<Coupon, 'id' | 'usageCount'>) => {
     const id = `coupon-${Date.now()}`;
     const fullCoupon: Coupon = {
       ...newCoupon,
@@ -1254,22 +958,33 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
     setCoupons((prev) => [fullCoupon, ...prev]);
 
-    try {
-      await setDoc(doc(db, 'coupons', id), cleanFirestorePayload(fullCoupon));
-    } catch {}
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (token) {
+      fetch('/api/coupons', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        credentials: 'include',
+        body: JSON.stringify(fullCoupon),
+      }).catch(() => {});
+    }
 
     addToast('Coupon Created', `Promo code ${fullCoupon.code} is now active.`, 'success');
   };
 
-  const deleteCoupon = async (id: string) => {
+  const deleteCoupon = (id: string) => {
     setCoupons((prev) => prev.filter((c) => c.id !== id));
     if (appliedCoupon?.id === id) {
       setAppliedCoupon(null);
     }
 
-    try {
-      await deleteDoc(doc(db, 'coupons', id));
-    } catch {}
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (token) {
+      fetch(`/api/coupons/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+        credentials: 'include',
+      }).catch(() => {});
+    }
 
     addToast('Coupon Deleted', 'Coupon removed from store.', 'info');
   };
@@ -1295,7 +1010,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         id: cred.user.uid,
         name: cred.user.displayName || (isAdminUser ? 'Store Administrator' : 'Popcarty User'),
         email: userEmail,
-        phone: cred.user.phoneNumber || '',
+        phone: cred.user.phoneNumber || '+91 98765 43210',
         role: isAdminUser ? 'admin' : 'customer',
         memberSince: 'October 2026',
         avatar: isAdminUser
@@ -1328,13 +1043,12 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         return false;
       }
       const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
-      const isAdminUser = cleanEmail === 'popcarty7@gmail.com';
       const user: User = {
         id: cred.user.uid,
         name: name.trim() || 'Popcarty User',
         email: cleanEmail,
         phone: phone.trim(),
-        role: isAdminUser ? 'admin' : 'customer',
+        role: 'customer',
         memberSince: 'October 2026',
       };
 
@@ -1395,30 +1109,52 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
     currentUserRef.current = updatedUser;
     setCurrentUser(updatedUser);
-    safeSetStorage(STORAGE_KEYS.USER, updatedUser);
+
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (token) {
+      fetch('/api/auth/profile', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        credentials: 'include',
+        body: JSON.stringify({
+          name: updatedUser.name,
+          email: updatedUser.email,
+          phone: updatedUser.phone,
+        }),
+      }).catch(() => {});
+    }
 
     addToast('Profile Saved', 'Your account details have been updated.', 'success');
   };
 
+  const syncAddressesWithBackend = (nextAddresses: Address[]) => {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (token) {
+      fetch('/api/addresses', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        credentials: 'include',
+        body: JSON.stringify({ addresses: nextAddresses }),
+      }).catch(() => {});
+    }
+  };
+
   // Addresses
-  const addAddress = (addr: Omit<Address, 'id' | 'userId'>): Address => {
+  const addAddress = (addr: Omit<Address, 'id' | 'userId'>) => {
+    if (!currentUser) return;
     const newAddr: Address = {
       ...addr,
-      fullName: addr.fullName || addr.name,
-      name: addr.name || addr.fullName || currentUser?.name || '',
-      pincode: addr.pincode || addr.zipCode,
-      zipCode: addr.zipCode || addr.pincode || '',
       id: `addr-${Date.now()}`,
-      userId: currentUser?.id || 'guest',
+      userId: currentUser.id,
     };
     setAddresses((prev) => {
       const next = newAddr.isDefault
         ? prev.map((a) => ({ ...a, isDefault: false })).concat(newAddr)
         : [...prev, newAddr];
+      syncAddressesWithBackend(next);
       return next;
     });
     addToast('Address Saved', 'New delivery address added.', 'success');
-    return newAddr;
   };
 
   const updateAddress = (id: string, updates: Partial<Address>) => {
@@ -1433,6 +1169,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
         return a;
       });
+      syncAddressesWithBackend(next);
       return next;
     });
     addToast('Address Updated', 'Changes saved successfully.', 'success');
@@ -1440,244 +1177,92 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const deleteAddress = (id: string) => {
     if (!currentUser) return;
-    setAddresses((prev) => prev.filter((a) => a.id !== id));
+    setAddresses((prev) => {
+      const next = prev.filter((a) => a.id !== id);
+      syncAddressesWithBackend(next);
+      return next;
+    });
     addToast('Address Deleted', 'Address removed from book.', 'info');
   };
 
   const setDefaultAddress = (id: string) => {
     if (!currentUser) return;
-    setAddresses((prev) => prev.map((a) => ({ ...a, isDefault: a.id === id })));
+    setAddresses((prev) => {
+      const next = prev.map((a) => ({ ...a, isDefault: a.id === id }));
+      syncAddressesWithBackend(next);
+      return next;
+    });
     addToast('Default Address Set', 'Default shipping location updated.', 'success');
   };
 
-  // Orders — Persisted in Firestore collection "orders" (doc id = orderNumber)
-  const createOrder = async (orderData: {
-    shippingAddress: Address;
-    shippingMethod: 'standard';
-    paymentMethod: PaymentMethodType;
-  }): Promise<Order> => {
-    const firebaseUid = auth.currentUser?.uid || currentUser?.id;
-    if (!firebaseUid) {
-      setAuthModalOpen(true);
-      throw new Error('Please sign in to your account to place an order.');
-    }
+  // Orders are created and paid through the server (api/create-order + api/verify-payment).
+  // This only updates the browser state after the server confirmed the payment.
+  const registerPaidOrder = (order: Order) => {
+    setOrders((prev) => [order, ...prev.filter((o) => o.id !== order.id)]);
 
-    const orderNumber = `ORD-${Math.floor(100000 + Math.random() * 900000)}`;
-    const shippingFee = cartShipping;
-    const nowIso = new Date().toISOString();
-
-    const normalizedAddress: Address = {
-      ...orderData.shippingAddress,
-      fullName: orderData.shippingAddress.fullName || orderData.shippingAddress.name || currentUser?.name || '',
-      name: orderData.shippingAddress.name || orderData.shippingAddress.fullName || currentUser?.name || '',
-      phone: orderData.shippingAddress.phone || currentUser?.phone || '',
-      houseNo: orderData.shippingAddress.houseNo || '',
-      street: orderData.shippingAddress.street || '',
-      area: orderData.shippingAddress.area || '',
-      landmark: orderData.shippingAddress.landmark || '',
-      city: orderData.shippingAddress.city || '',
-      district: orderData.shippingAddress.district || '',
-      state: orderData.shippingAddress.state || '',
-      zipCode: orderData.shippingAddress.zipCode || orderData.shippingAddress.pincode || '',
-      pincode: orderData.shippingAddress.pincode || orderData.shippingAddress.zipCode || '',
-      country: orderData.shippingAddress.country || 'India',
-    };
-
-    const isCod = orderData.paymentMethod === 'cod';
-    const paymentStatus: PaymentStatusType = isCod ? 'cod_pending' : 'paid';
-
-    const newOrder: Order = {
-      id: orderNumber,
-      orderNumber,
-      userId: firebaseUid,
-      customerName: normalizedAddress.fullName || normalizedAddress.name || currentUser?.name || 'Popcarty Customer',
-      customerEmail:
-        orderData.shippingAddress.email ||
-        auth.currentUser?.email ||
-        currentUser?.email ||
-        '',
-      customerPhone: normalizedAddress.phone || currentUser?.phone || '',
-      items: cart.map((item) => ({
-        productId: item.productId,
-        sourceProductId: item.product.sourceProductId || item.productId,
-        supplierSku: (item.product as any).supplierSku || item.product.sku || '',
-        sku: item.product.sku || (item.product as any).supplierSku || item.productId,
-        productName: item.product.name,
-        productImage: item.product.images[0] || '',
-        brand: item.product.brand || 'Popcarty',
-        color: item.selectedColor || '',
-        size: item.selectedSize || '',
-        variantTitle: item.selectedVariantTitle || item.selectedColor || 'Default',
-        costPrice: item.product.costPrice || Math.round(item.product.price * 0.7),
-        price: item.product.price,
-        quantity: item.quantity,
-      })),
-      shippingAddress: normalizedAddress,
-      shippingMethod: 'standard',
-      shippingCost: shippingFee,
-      subtotal: cartSubtotal,
-      discountAmount: cartDiscount,
-      couponCode: appliedCoupon?.code || '',
-      tax: cartTax,
-      totalAmount: Math.max(0, cartSubtotal - cartDiscount + shippingFee + cartTax),
-      paymentMethod: orderData.paymentMethod,
-      paymentStatus,
-      orderStatus: 'placed',
-      trackingNumber: '',
-      courierName: '',
-      adminNotes: '',
-      statusHistory: [
-        {
-          status: 'placed',
-          timestamp: new Date().toLocaleString('en-IN', {
-            dateStyle: 'medium',
-            timeStyle: 'short',
-          }),
-          note: isCod
-            ? 'Order placed via Cash on Delivery (COD)'
-            : `Order placed & paid via ${orderData.paymentMethod.toUpperCase()}`,
-        },
-      ],
-      createdAt: nowIso,
-      updatedAt: nowIso,
-    };
-
-    // Save complete order snapshot to Firestore collection "orders" with doc id = orderNumber
-    try {
-      await setDoc(doc(db, 'orders', orderNumber), cleanFirestorePayload(newOrder));
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, `orders/${orderNumber}`);
-      if (!isQuotaExceededError(error)) {
-        throw error;
-      }
-    }
-
-    // Deduct stock locally
-    setProducts((prev) =>
-      prev.map((p) => {
-        const cartMatch = cart.find((c) => c.productId === p.id);
-        if (cartMatch) {
-          const newQty = Math.max(0, p.stockQuantity - cartMatch.quantity);
-          return { ...p, stockQuantity: newQty, inStock: newQty > 0 };
-        }
-        return p;
-      })
-    );
-
-    // Save order in state
-    setOrders((prev) => {
-      if (prev.some((o) => o.orderNumber === newOrder.orderNumber)) return prev;
-      return [newOrder, ...prev];
-    });
-
-    // Update coupon usage
     if (appliedCoupon) {
       setCoupons((prev) =>
         prev.map((c) => (c.id === appliedCoupon.id ? { ...c, usageCount: c.usageCount + 1 } : c))
       );
     }
 
-    // Add notification
     const orderNotif: NotificationItem = {
       id: `notif-${Date.now()}`,
-      title: `Order #${newOrder.orderNumber} Confirmed`,
-      message: isCod
-        ? 'Your Cash on Delivery order is confirmed and being prepared.'
-        : 'Your payment was processed. Tracking will update once shipped.',
+      title: `Order #${order.orderNumber} Confirmed`,
+      message: 'Your payment was received. Tracking will update once shipped.',
       timestamp: 'Just now',
       read: false,
       type: 'order',
     };
     setNotifications((prev) => [orderNotif, ...prev]);
 
-    // Clear cart and coupon
     clearCart();
     setAppliedCoupon(null);
-
-    return newOrder;
   };
 
-  const updateOrderStatus = async (orderId: string, status: OrderStatus, note?: string) => {
-    const targetOrder = orders.find((o) => o.id === orderId || o.orderNumber === orderId);
-    const docId = targetOrder?.orderNumber || orderId;
-    const timestamp = new Date().toLocaleString('en-IN', {
-      dateStyle: 'medium',
-      timeStyle: 'short',
-    });
-    const newEntry = {
-      status,
-      timestamp,
-      note: note || `Order status updated to ${status.replace(/_/g, ' ').toUpperCase()}`,
-    };
-    const nextHistory = [...(targetOrder?.statusHistory || []), newEntry];
-    const updatedAt = new Date().toISOString();
-
+  const updateOrderStatus = (orderId: string, status: OrderStatus, note?: string) => {
     setOrders((prev) =>
       prev.map((o) => {
-        if (o.id === orderId || o.orderNumber === orderId) {
+        if (o.id === orderId) {
+          const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          const newHistory = [
+            ...o.statusHistory,
+            {
+              status,
+              timestamp,
+              note: note || `Status updated to ${status.replace(/_/g, ' ')}`,
+            },
+          ];
           return {
             ...o,
             orderStatus: status,
-            statusHistory: nextHistory,
-            updatedAt,
+            statusHistory: newHistory,
           };
         }
         return o;
       })
     );
 
-    try {
-      await updateDoc(doc(db, 'orders', docId), {
-        orderStatus: status,
-        statusHistory: nextHistory,
-        updatedAt,
-      });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `orders/${docId}`);
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (token) {
+      fetch(`/api/orders/${encodeURIComponent(orderId)}/status`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        credentials: 'include',
+        body: JSON.stringify({ status }),
+      }).catch(() => {});
     }
 
-    addToast('Order Status Updated', `Order #${docId} is now ${status.replace(/_/g, ' ')}.`, 'info');
+    addToast('Order Status Updated', `Order ${orderId} is now ${status}.`, 'info');
   };
 
-  const updateOrderMetadata = async (
-    orderId: string,
-    updates: {
-      paymentStatus?: PaymentStatusType;
-      trackingNumber?: string;
-      courierName?: string;
-      adminNotes?: string;
-    }
-  ) => {
-    const targetOrder = orders.find((o) => o.id === orderId || o.orderNumber === orderId);
-    const docId = targetOrder?.orderNumber || orderId;
-    const updatedAt = new Date().toISOString();
-
-    setOrders((prev) =>
-      prev.map((o) => (o.id === orderId || o.orderNumber === orderId ? { ...o, ...updates, updatedAt } : o))
-    );
-
-    try {
-      await updateDoc(
-        doc(db, 'orders', docId),
-        cleanFirestorePayload({
-          ...updates,
-          updatedAt,
-        })
-      );
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `orders/${docId}`);
-    }
-
-    addToast('Order Updated', `Saved details for order #${docId}.`, 'success');
-  };
-
-  // Strictly return empty array when logged out
+  // Strictly return empty array when logged out — never leak orders to unauthenticated state
   const userOrders = useMemo(() => {
     if (!currentUser) return [];
     return orders.filter(
       (o) =>
         o.userId === currentUser.id ||
-        (currentUser.email && o.customerEmail?.toLowerCase() === currentUser.email.toLowerCase())
+        o.customerEmail?.toLowerCase() === currentUser.email.toLowerCase()
     );
   }, [orders, currentUser]);
 
@@ -1700,28 +1285,19 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return notifications.filter((n) => !n.read).length;
   }, [notifications]);
 
-  // Settings (persisted to Firestore settings/storefront)
+  // Settings
   const updateSettings = (newSettings: Partial<StoreSettings>) => {
     setSettings((prev) => {
-      const updated: StoreSettings = {
-        ...prev,
-        ...newSettings,
-        announcementBar: {
-          ...prev.announcementBar,
-          ...(newSettings.announcementBar || {}),
-        },
-        homepageConfig: {
-          ...(prev.homepageConfig || {}),
-          ...(newSettings.homepageConfig || {}),
-        },
-      };
-
-      if (currentUser?.role === 'admin') {
-        setDoc(doc(db, 'settings', 'storefront'), cleanFirestorePayload(updated), { merge: true }).catch((e) => {
-          handleFirestoreError(e, OperationType.WRITE, 'settings/storefront');
-        });
+      const updated = { ...prev, ...newSettings };
+      const token = localStorage.getItem(AUTH_TOKEN_KEY);
+      if (token) {
+        fetch('/api/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          credentials: 'include',
+          body: JSON.stringify(updated),
+        }).catch(() => {});
       }
-
       return updated;
     });
     addToast('Settings Saved', 'Store configuration updated.', 'success');
@@ -1749,7 +1325,6 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         bulkUpdateCategory,
         bulkUpdateStatus,
         bulkUpdateMarkup,
-        bulkUpdateFlags,
         importProducts,
         resetToDefaultCatalog,
         reviews,
@@ -1791,9 +1366,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         deleteAddress,
         setDefaultAddress,
         orders: currentUser?.role === 'admin' ? orders : userOrders,
-        createOrder,
+        registerPaidOrder,
         updateOrderStatus,
-        updateOrderMetadata,
         userOrders,
         getOrderById,
         settings,

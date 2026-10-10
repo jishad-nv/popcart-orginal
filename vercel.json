@@ -1,11 +1,14 @@
 {
   "version": 2,
   "functions": {
-    "api/fetch-collection.ts": { "maxDuration": 30 }
+    "api/fetch-collection.ts": { "maxDuration": 30 },
+    "api/create-order.ts": { "maxDuration": 30 },
+    "api/verify-payment.ts": { "maxDuration": 30 },
+    "api/razorpay-webhook.ts": { "maxDuration": 30 }
   },
   "rewrites": [
     {
-      "source": "/api/((?!fetch-collection).*)",
+      "source": "/api/((?!fetch-collection|create-order|verify-payment|razorpay-webhook).*)",
       "destination": "/api/index.ts"
     },
     {

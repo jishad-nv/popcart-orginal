@@ -454,9 +454,19 @@ apiRouter.put('/addresses', requireAuth, (req: AuthenticatedRequest, res: Respon
 // 2. PRODUCT CATALOG ROUTES
 // ==========================================
 
+// Never expose the wholesale cost or supplier details on public routes.
+const toPublicProduct = (p: any) => {
+  const { costPrice, profitAmount, profitPercentage, sourceProductId, sourceUrl, ...rest } = p || {};
+  if (rest.specifications && typeof rest.specifications === 'object') {
+    const { supplierSku, supplierHandle, supplierVariantId, ...specs } = rest.specifications;
+    rest.specifications = specs;
+  }
+  return rest;
+};
+
 apiRouter.get('/products', (_req: Request, res: Response): void => {
   try {
-    const products = getAllProductsFromDb();
+    const products = getAllProductsFromDb().map(toPublicProduct);
     res.json({ success: true, count: products.length, products });
   } catch (err: any) {
     res.status(500).json({ error: 'Internal Server Error', message: 'Failed to retrieve products.' });
@@ -475,7 +485,7 @@ apiRouter.get('/products/:id', (req: Request, res: Response): void => {
     res.status(404).json({ error: 'Not Found', message: 'Product not found.' });
     return;
   }
-  res.json({ success: true, product });
+  res.json({ success: true, product: toPublicProduct(product) });
 });
 
 apiRouter.post('/products', requireAdminAuth, (req: AuthenticatedRequest, res: Response): void => {

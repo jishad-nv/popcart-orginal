@@ -10,6 +10,12 @@ service cloud.firestore {
       return isSignedIn() && request.auth.token.email == 'popcarty7@gmail.com';
     }
 
+    // Dedicated server user (api/create-order, api/verify-payment, api/razorpay-webhook sign in as this user).
+    // Create it in Firebase Authentication BEFORE publishing these rules, with a long random password.
+    function isShopServer() {
+      return isSignedIn() && request.auth.token.email == 'shop-server@popcarty.in';
+    }
+
     // Default: deny everything
     match /{document=**} {
       allow read, write: if false;
@@ -35,11 +41,13 @@ service cloud.firestore {
       allow write: if isOwner();
     }
 
-    // Orders: a customer can create and read their own orders. The owner can read or change all orders.
+    // Orders are created and marked paid ONLY by the server after the payment is verified.
+    // A customer can read their own orders. The owner can read and manage all of them.
     match /orders/{orderId} {
-      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow read: if isOwner() || (isSignedIn() && resource.data.userId == request.auth.uid);
-      allow update, delete: if isOwner();
+      allow create: if isShopServer();
+      allow read: if isOwner() || isShopServer() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow update: if isOwner() || isShopServer();
+      allow delete: if isOwner();
     }
 
     // Reviews: anyone signed in can add one; only the owner can edit or remove.

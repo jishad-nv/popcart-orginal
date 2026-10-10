@@ -6,9 +6,16 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 interface TrendingCarouselProps {
   products: Product[];
   gradients: string[];
+  autoPlay?: boolean;
+  speedMs?: number;
 }
 
-export const TrendingCarousel: React.FC<TrendingCarouselProps> = ({ products, gradients }) => {
+export const TrendingCarousel: React.FC<TrendingCarouselProps> = ({
+  products,
+  gradients,
+  autoPlay = true,
+  speedMs = 2800,
+}) => {
   const cappedProducts = useMemo(() => (products || []).slice(0, 12), [products]);
   const n = cappedProducts.length;
 
@@ -126,13 +133,15 @@ export const TrendingCarousel: React.FC<TrendingCarouselProps> = ({ products, gr
   // Auto-play cycle
   const startAutoPlay = useCallback(() => {
     if (autoPlayTimerRef.current) clearInterval(autoPlayTimerRef.current);
+    if (!autoPlay) return;
+    const intervalMs = Math.max(1200, speedMs || 2800);
     autoPlayTimerRef.current = setInterval(() => {
       if (!isInteractingRef.current) {
         setIsTransitioning(true);
         setCurrentIndex((prev) => prev + 1);
       }
-    }, 2800);
-  }, []);
+    }, intervalMs);
+  }, [autoPlay, speedMs]);
 
   const pauseAutoPlay = useCallback(() => {
     if (autoPlayTimerRef.current) {

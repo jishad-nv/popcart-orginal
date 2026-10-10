@@ -35,10 +35,11 @@ service cloud.firestore {
       allow write: if isOwner();
     }
 
-    // Orders: a customer can only create an order for themselves. Only the owner can read or change orders.
+    // Orders: a customer can create and read their own orders. The owner can read or change all orders.
     match /orders/{orderId} {
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow read, update, delete: if isOwner();
+      allow read: if isOwner() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow update, delete: if isOwner();
     }
 
     // Reviews: anyone signed in can add one; only the owner can edit or remove.

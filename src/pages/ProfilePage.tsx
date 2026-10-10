@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useStore } from '../context/StoreContext';
 import { ProductCard } from '../components/product/ProductCard';
+import { AddressFormFields } from '../components/common/AddressFormFields';
+import { Address } from '../types';
 import {
   User,
   Package,
@@ -8,17 +10,14 @@ import {
   Heart,
   Settings,
   LogOut,
-  Check,
   Plus,
   Trash2,
-  Edit2,
   Truck,
-  ExternalLink,
   ShieldCheck,
-  Calendar,
-  Phone,
-  Mail,
   ChevronRight,
+  Copy,
+  Check,
+  ExternalLink,
 } from 'lucide-react';
 
 export const ProfilePage: React.FC = () => {
@@ -43,7 +42,7 @@ export const ProfilePage: React.FC = () => {
     isAdmin,
   } = useStore();
 
-  const [activeTab, setActiveTab] = useState<'details' | 'orders' | 'addresses' | 'wishlist' | 'settings'>('details');
+  const [activeTab, setActiveTab] = useState<'details' | 'orders' | 'addresses' | 'wishlist' | 'settings'>('orders');
 
   // Profile details form state synced with currentUser
   const [name, setName] = useState(currentUser?.name || '');
@@ -65,16 +64,35 @@ export const ProfilePage: React.FC = () => {
 
   // Address add form modal state
   const [isAddingAddress, setIsAddingAddress] = useState(false);
-  const [newAddrName, setNewAddrName] = useState('');
-  const [newAddrStreet, setNewAddrStreet] = useState('');
-  const [newAddrCity, setNewAddrCity] = useState('');
-  const [newAddrState, setNewAddrState] = useState('');
-  const [newAddrZip, setNewAddrZip] = useState('');
-  const [newAddrPhone, setNewAddrPhone] = useState('');
-  const [newAddrLabel, setNewAddrLabel] = useState<'Home' | 'Work' | 'Other'>('Home');
+  const [newAddressForm, setNewAddressForm] = useState<Omit<Address, 'id' | 'userId'>>({
+    name: currentUser?.name || '',
+    fullName: currentUser?.name || '',
+    phone: currentUser?.phone || '',
+    alternatePhone: '',
+    email: currentUser?.email || '',
+    houseNo: '',
+    street: '',
+    area: '',
+    landmark: '',
+    city: '',
+    district: '',
+    state: '',
+    zipCode: '',
+    pincode: '',
+    country: 'India',
+    deliveryInstructions: '',
+    isDefault: addresses.length === 0,
+    label: 'Home',
+  });
 
-  // Selected Order for Tracking Details Modal
-  const [viewingOrderNumber, setViewingOrderNumber] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const handleCopyText = (text: string, id: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 1800);
+    addToast('Copied', 'Copied to clipboard.', 'info');
+  };
 
   const handleSaveProfile = (e: React.FormEvent) => {
     e.preventDefault();
@@ -83,25 +101,60 @@ export const ProfilePage: React.FC = () => {
 
   const handleCreateAddress = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newAddrStreet || !newAddrCity || !newAddrZip) {
-      addToast('Incomplete Address', 'Please fill all required address fields.', 'error');
+    const cleanPhone = (newAddressForm.phone || '').replace(/\D/g, '').slice(-10);
+    const cleanPin = (newAddressForm.zipCode || newAddressForm.pincode || '').replace(/\D/g, '');
+
+    if (!(newAddressForm.fullName || newAddressForm.name)?.trim()) {
+      addToast('Name Required', 'Please enter the recipient full name.', 'error');
       return;
     }
+    if (cleanPhone.length !== 10) {
+      addToast('Valid Phone Required', 'Please enter a valid 10-digit mobile number.', 'error');
+      return;
+    }
+    if (!newAddressForm.houseNo?.trim() && !newAddressForm.street?.trim()) {
+      addToast('Address Required', 'Please enter your house/flat number and street.', 'error');
+      return;
+    }
+    if (!newAddressForm.city?.trim() || !newAddressForm.state?.trim()) {
+      addToast('City & State Required', 'Please enter your city and state.', 'error');
+      return;
+    }
+    if (cleanPin.length !== 6) {
+      addToast('Valid PIN Code Required', 'Please enter a valid 6-digit PIN code.', 'error');
+      return;
+    }
+
     addAddress({
-      name: newAddrName || name,
-      street: newAddrStreet,
-      city: newAddrCity,
-      state: newAddrState || 'State',
-      zipCode: newAddrZip,
-      country: 'India',
-      phone: newAddrPhone || phone,
+      ...newAddressForm,
+      name: (newAddressForm.fullName || newAddressForm.name).trim(),
+      fullName: (newAddressForm.fullName || newAddressForm.name).trim(),
+      phone: cleanPhone,
+      zipCode: cleanPin,
+      pincode: cleanPin,
       isDefault: addresses.length === 0,
-      label: newAddrLabel,
     });
     setIsAddingAddress(false);
-    setNewAddrStreet('');
-    setNewAddrCity('');
-    setNewAddrZip('');
+    setNewAddressForm({
+      name: currentUser?.name || '',
+      fullName: currentUser?.name || '',
+      phone: currentUser?.phone || '',
+      alternatePhone: '',
+      email: currentUser?.email || '',
+      houseNo: '',
+      street: '',
+      area: '',
+      landmark: '',
+      city: '',
+      district: '',
+      state: '',
+      zipCode: '',
+      pincode: '',
+      country: 'India',
+      deliveryInstructions: '',
+      isDefault: false,
+      label: 'Home',
+    });
   };
 
   // Strict Route / Auth Protection: Never expose private profile details when logged out
@@ -135,9 +188,11 @@ export const ProfilePage: React.FC = () => {
     );
   }
 
+  const ORDER_STEPS = ['placed', 'confirmed', 'packed', 'shipped', 'out_for_delivery', 'delivered'];
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
-      {/* 1. TOP BRAND GRADIENT HEADER (As in Video 00:00 & 00:46) */}
+      {/* 1. TOP BRAND GRADIENT HEADER */}
       <div className="rounded-3xl bg-gradient-to-r from-[#2B1B54] via-[#1E1338] to-[#18112C] p-6 sm:p-8 text-white shadow-xl relative overflow-hidden">
         <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
           <div className="flex items-center gap-4">
@@ -153,8 +208,12 @@ export const ProfilePage: React.FC = () => {
               </h1>
               <p className="text-xs text-slate-300 mt-1 flex items-center gap-2">
                 <span>{currentUser?.email}</span>
-                <span>·</span>
-                <span>{currentUser?.phone}</span>
+                {currentUser?.phone && (
+                  <>
+                    <span>·</span>
+                    <span>{currentUser?.phone}</span>
+                  </>
+                )}
               </p>
             </div>
           </div>
@@ -193,23 +252,8 @@ export const ProfilePage: React.FC = () => {
         {/* Navigation Sidebar (4 Cols) */}
         <aside className="lg:col-span-4 bg-white p-3 sm:p-4 rounded-3xl border border-slate-200/80 shadow-xs space-y-1">
           <button
-            onClick={() => setActiveTab('details')}
-            className={`w-full flex items-center justify-between p-3 rounded-2xl text-xs font-bold transition-all text-left ${
-              activeTab === 'details'
-                ? 'bg-violet-600 text-white shadow-md shadow-violet-500/20'
-                : 'text-slate-600 hover:bg-slate-50'
-            }`}
-          >
-            <div className="flex items-center gap-3">
-              <User className="w-4 h-4" />
-              <span>Account Details</span>
-            </div>
-            <ChevronRight className="w-3.5 h-3.5 opacity-60" />
-          </button>
-
-          <button
             onClick={() => setActiveTab('orders')}
-            className={`w-full flex items-center justify-between p-3 rounded-2xl text-xs font-bold transition-all text-left ${
+            className={`w-full flex items-center justify-between p-3 rounded-2xl text-xs font-bold transition-all text-left cursor-pointer ${
               activeTab === 'orders'
                 ? 'bg-violet-600 text-white shadow-md shadow-violet-500/20'
                 : 'text-slate-600 hover:bg-slate-50'
@@ -224,7 +268,7 @@ export const ProfilePage: React.FC = () => {
 
           <button
             onClick={() => setActiveTab('addresses')}
-            className={`w-full flex items-center justify-between p-3 rounded-2xl text-xs font-bold transition-all text-left ${
+            className={`w-full flex items-center justify-between p-3 rounded-2xl text-xs font-bold transition-all text-left cursor-pointer ${
               activeTab === 'addresses'
                 ? 'bg-violet-600 text-white shadow-md shadow-violet-500/20'
                 : 'text-slate-600 hover:bg-slate-50'
@@ -238,8 +282,23 @@ export const ProfilePage: React.FC = () => {
           </button>
 
           <button
+            onClick={() => setActiveTab('details')}
+            className={`w-full flex items-center justify-between p-3 rounded-2xl text-xs font-bold transition-all text-left cursor-pointer ${
+              activeTab === 'details'
+                ? 'bg-violet-600 text-white shadow-md shadow-violet-500/20'
+                : 'text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            <div className="flex items-center gap-3">
+              <User className="w-4 h-4" />
+              <span>Account Details</span>
+            </div>
+            <ChevronRight className="w-3.5 h-3.5 opacity-60" />
+          </button>
+
+          <button
             onClick={() => setActiveTab('wishlist')}
-            className={`w-full flex items-center justify-between p-3 rounded-2xl text-xs font-bold transition-all text-left ${
+            className={`w-full flex items-center justify-between p-3 rounded-2xl text-xs font-bold transition-all text-left cursor-pointer ${
               activeTab === 'wishlist'
                 ? 'bg-violet-600 text-white shadow-md shadow-violet-500/20'
                 : 'text-slate-600 hover:bg-slate-50'
@@ -254,7 +313,7 @@ export const ProfilePage: React.FC = () => {
 
           <button
             onClick={() => setActiveTab('settings')}
-            className={`w-full flex items-center justify-between p-3 rounded-2xl text-xs font-bold transition-all text-left ${
+            className={`w-full flex items-center justify-between p-3 rounded-2xl text-xs font-bold transition-all text-left cursor-pointer ${
               activeTab === 'settings'
                 ? 'bg-violet-600 text-white shadow-md shadow-violet-500/20'
                 : 'text-slate-600 hover:bg-slate-50'
@@ -271,7 +330,7 @@ export const ProfilePage: React.FC = () => {
             {isAdmin && (
               <button
                 onClick={() => navigateTo('admin')}
-                className="w-full flex items-center gap-3 p-3 rounded-2xl text-xs font-bold text-violet-700 hover:bg-violet-50 transition-colors text-left"
+                className="w-full flex items-center gap-3 p-3 rounded-2xl text-xs font-bold text-violet-700 hover:bg-violet-50 transition-colors text-left cursor-pointer"
               >
                 <ShieldCheck className="w-4 h-4 text-violet-600" />
                 <span>Admin Dashboard</span>
@@ -294,7 +353,7 @@ export const ProfilePage: React.FC = () => {
 
         {/* Tab Content Panel (8 Cols) */}
         <main className="lg:col-span-8 bg-white p-6 sm:p-8 rounded-3xl border border-slate-200/80 shadow-xs">
-          {/* TAB 1: ACCOUNT DETAILS (As in Video 00:00 & 00:46) */}
+          {/* TAB 1: ACCOUNT DETAILS */}
           {activeTab === 'details' && (
             <div className="space-y-6">
               <div>
@@ -348,7 +407,7 @@ export const ProfilePage: React.FC = () => {
             </div>
           )}
 
-          {/* TAB 2: MY ORDERS (As in Video 00:38) */}
+          {/* TAB 2: MY ORDERS (Live synced with Firestore) */}
           {activeTab === 'orders' && (
             <div className="space-y-6">
               <div>
@@ -356,7 +415,7 @@ export const ProfilePage: React.FC = () => {
                   My Orders ({userOrders.length})
                 </h3>
                 <p className="text-xs text-slate-500 mt-1">
-                  Track shipment progress, view purchase receipts, and reorder favourite items.
+                  Real-time order status, tracking numbers, and delivery receipts synced directly with Popcarty.
                 </p>
               </div>
 
@@ -364,97 +423,206 @@ export const ProfilePage: React.FC = () => {
                 <div className="py-12 text-center text-slate-500 space-y-3">
                   <Package className="w-12 h-12 text-slate-300 mx-auto" />
                   <p className="text-sm font-semibold">No orders yet</p>
-                  <p className="text-xs text-slate-400">Your placed orders will appear here for tracking.</p>
+                  <p className="text-xs text-slate-400">Your placed orders will appear here for live tracking.</p>
                   <button
                     onClick={() => navigateTo('shop')}
-                    className="px-4 py-2 bg-violet-600 text-white text-xs font-bold rounded-xl"
+                    className="px-4 py-2 bg-violet-600 text-white text-xs font-bold rounded-xl cursor-pointer"
                   >
                     Start Shopping
                   </button>
                 </div>
               ) : (
-                <div className="space-y-4">
-                  {userOrders.map((ord) => (
-                    <div
-                      key={ord.id}
-                      className="p-5 rounded-2xl border border-slate-200 hover:border-violet-200 transition-all space-y-4 bg-slate-50/30"
-                    >
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono font-bold text-sm text-slate-900">
-                              #{ord.orderNumber}
-                            </span>
-                            <span
-                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                                ord.orderStatus === 'delivered'
-                                  ? 'bg-emerald-100 text-emerald-800'
-                                  : ord.orderStatus === 'shipped'
-                                  ? 'bg-violet-100 text-violet-800'
-                                  : 'bg-amber-100 text-amber-800'
-                              }`}
-                            >
-                              {ord.orderStatus.replace(/_/g, ' ')}
+                <div className="space-y-5">
+                  {userOrders.map((ord) => {
+                    const currentStepIdx = ORDER_STEPS.indexOf(
+                      ord.orderStatus === 'processing' ? 'confirmed' : ord.orderStatus
+                    );
+                    const addr = ord.shippingAddress;
+
+                    return (
+                      <div
+                        key={ord.orderNumber || ord.id}
+                        className="p-5 rounded-2xl border border-slate-200 hover:border-violet-200 transition-all space-y-4 bg-slate-50/30"
+                      >
+                        {/* Order Header */}
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-mono font-bold text-sm text-slate-900">
+                                #{ord.orderNumber}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handleCopyText(ord.orderNumber, `ord-${ord.orderNumber}`)}
+                                className="text-slate-400 hover:text-violet-600 p-0.5 cursor-pointer"
+                                title="Copy Order ID"
+                              >
+                                {copiedId === `ord-${ord.orderNumber}` ? (
+                                  <Check className="w-3.5 h-3.5 text-emerald-600" />
+                                ) : (
+                                  <Copy className="w-3.5 h-3.5" />
+                                )}
+                              </button>
+                              <span
+                                className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                                  ord.orderStatus === 'delivered'
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : ord.orderStatus === 'cancelled' || ord.orderStatus === 'returned'
+                                    ? 'bg-rose-100 text-rose-800'
+                                    : ord.orderStatus === 'shipped' || ord.orderStatus === 'out_for_delivery'
+                                    ? 'bg-violet-100 text-violet-800'
+                                    : 'bg-amber-100 text-amber-800'
+                                }`}
+                              >
+                                {ord.orderStatus.replace(/_/g, ' ')}
+                              </span>
+                            </div>
+                            <span className="text-[11px] text-slate-400 block mt-0.5">
+                              Placed on{' '}
+                              {new Date(ord.createdAt).toLocaleString('en-IN', {
+                                dateStyle: 'medium',
+                                timeStyle: 'short',
+                              })}
                             </span>
                           </div>
-                          <span className="text-[11px] text-slate-400 block mt-0.5">
-                            Placed on {new Date(ord.createdAt).toLocaleDateString()}
-                          </span>
+
+                          <div className="text-left sm:text-right">
+                            <span className="text-sm font-extrabold text-slate-900 tabular-nums">
+                              {formatPrice(ord.totalAmount)}
+                            </span>
+                            <span className="text-[11px] text-slate-500 block">
+                              {ord.items.length} {ord.items.length === 1 ? 'item' : 'items'} ·{' '}
+                              {ord.paymentMethod === 'cod' ? 'COD' : ord.paymentMethod.toUpperCase()} (
+                              {ord.paymentStatus.replace(/_/g, ' ')})
+                            </span>
+                          </div>
                         </div>
 
-                        <div className="text-left sm:text-right">
-                          <span className="text-sm font-extrabold text-slate-900 tabular-nums">
-                            {formatPrice(ord.totalAmount)}
-                          </span>
-                          <span className="text-[11px] text-slate-400 block">
-                            {ord.items.length} items · {ord.paymentMethod.toUpperCase()}
-                          </span>
-                        </div>
-                      </div>
+                        {/* Visual Progress Bar (unless cancelled/returned) */}
+                        {ord.orderStatus !== 'cancelled' && ord.orderStatus !== 'returned' && (
+                          <div className="grid grid-cols-6 gap-1 pt-1">
+                            {[
+                              { id: 'placed', label: 'Placed' },
+                              { id: 'confirmed', label: 'Confirmed' },
+                              { id: 'packed', label: 'Packed' },
+                              { id: 'shipped', label: 'Shipped' },
+                              { id: 'out_for_delivery', label: 'Out for Delivery' },
+                              { id: 'delivered', label: 'Delivered' },
+                            ].map((st, idx) => {
+                              const done = currentStepIdx >= idx;
+                              return (
+                                <div key={st.id} className="text-center space-y-1">
+                                  <div
+                                    className={`h-1.5 rounded-full transition-colors ${
+                                      done ? 'bg-violet-600' : 'bg-slate-200'
+                                    }`}
+                                  />
+                                  <span
+                                    className={`text-[10px] block leading-tight ${
+                                      done ? 'font-bold text-violet-800' : 'text-slate-400'
+                                    }`}
+                                  >
+                                    {st.label}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
 
-                      {/* Items */}
-                      <div className="space-y-2">
-                        {ord.items.map((item, idx) => (
-                          <div key={idx} className="flex items-center justify-between text-xs">
-                            <div className="flex items-center gap-3">
-                              <img
-                                src={item.productImage}
-                                alt=""
-                                className="w-10 h-10 rounded-lg object-cover border border-slate-200 shrink-0"
-                              />
+                        {/* Courier & Tracking Info Banner if added by Admin */}
+                        {(ord.trackingNumber || ord.courierName) && (
+                          <div className="p-3 rounded-xl bg-violet-50 border border-violet-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+                            <div className="flex items-center gap-2">
+                              <Truck className="w-4 h-4 text-violet-600 shrink-0" />
                               <div>
-                                <span className="font-semibold text-slate-900 block">{item.productName}</span>
-                                <span className="text-[11px] text-slate-500">
-                                  {item.color ? `Color: ${item.color} · ` : ''}Qty: {item.quantity}
+                                <span className="font-bold text-violet-950">
+                                  Courier: {ord.courierName || 'Standard Express'}
                                 </span>
+                                {ord.trackingNumber && (
+                                  <span className="ml-2 font-mono text-violet-700 font-semibold">
+                                    AWB / Tracking: {ord.trackingNumber}
+                                  </span>
+                                )}
                               </div>
                             </div>
-                            <span className="font-semibold text-slate-800 tabular-nums">
-                              {formatPrice(item.price * item.quantity)}
+                            {ord.trackingNumber && (
+                              <button
+                                type="button"
+                                onClick={() => handleCopyText(ord.trackingNumber!, `trk-${ord.orderNumber}`)}
+                                className="px-2.5 py-1 bg-white hover:bg-violet-100 text-violet-700 rounded-lg border border-violet-200 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                              >
+                                <Copy className="w-3 h-3" />
+                                <span>Copy Tracking #</span>
+                              </button>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Items */}
+                        <div className="space-y-2">
+                          {ord.items.map((item, idx) => (
+                            <div key={idx} className="flex items-center justify-between text-xs">
+                              <div className="flex items-center gap-3">
+                                <img
+                                  src={item.productImage}
+                                  alt=""
+                                  className="w-11 h-11 rounded-lg object-cover border border-slate-200 shrink-0"
+                                />
+                                <div>
+                                  <span className="font-semibold text-slate-900 block">{item.productName}</span>
+                                  <span className="text-[11px] text-slate-500">
+                                    {item.color ? `Variant: ${item.color} · ` : ''}
+                                    {item.size ? `Size: ${item.size} · ` : ''}
+                                    Qty: {item.quantity} × {formatPrice(item.price)}
+                                  </span>
+                                </div>
+                              </div>
+                              <span className="font-bold text-slate-800 tabular-nums">
+                                {formatPrice(item.price * item.quantity)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Delivery Address Snapshot */}
+                        {addr && (
+                          <div className="p-3 rounded-xl bg-white border border-slate-200/70 text-[11px] text-slate-600 space-y-0.5">
+                            <span className="font-bold text-slate-800 block">
+                              Delivery To: {addr.fullName || addr.name} ({addr.phone})
+                            </span>
+                            <span className="block">
+                              {[addr.houseNo, addr.street, addr.area, addr.landmark ? `Near ${addr.landmark}` : '']
+                                .filter(Boolean)
+                                .join(', ')}
+                            </span>
+                            <span className="block">
+                              {[addr.city, addr.district, addr.state].filter(Boolean).join(', ')} -{' '}
+                              {addr.pincode || addr.zipCode}
                             </span>
                           </div>
-                        ))}
-                      </div>
+                        )}
 
-                      {/* Tracking / Stepper History */}
-                      {ord.statusHistory && ord.statusHistory.length > 0 && (
-                        <div className="pt-2 border-t border-slate-100">
-                          <span className="text-[11px] font-bold text-slate-700 block mb-1">Tracking History:</span>
-                          <div className="space-y-1">
-                            {ord.statusHistory.map((step, idx) => (
-                              <div key={idx} className="flex items-center justify-between text-[11px] text-slate-500">
-                                <span className="flex items-center gap-1.5 font-medium text-slate-700">
-                                  <Truck className="w-3 h-3 text-violet-600" />
-                                  {step.note}
-                                </span>
-                                <span className="text-slate-400">{step.timestamp}</span>
-                              </div>
-                            ))}
+                        {/* Tracking / Stepper History */}
+                        {ord.statusHistory && ord.statusHistory.length > 0 && (
+                          <div className="pt-2 border-t border-slate-100">
+                            <span className="text-[11px] font-bold text-slate-700 block mb-1">Status Updates:</span>
+                            <div className="space-y-1">
+                              {ord.statusHistory.map((step, idx) => (
+                                <div key={idx} className="flex items-center justify-between text-[11px] text-slate-500">
+                                  <span className="flex items-center gap-1.5 font-medium text-slate-700">
+                                    <Truck className="w-3 h-3 text-violet-600 shrink-0" />
+                                    {step.note}
+                                  </span>
+                                  <span className="text-slate-400">{step.timestamp}</span>
+                                </div>
+                              ))}
+                            </div>
                           </div>
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -466,7 +634,9 @@ export const ProfilePage: React.FC = () => {
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-lg font-bold text-slate-900 tracking-tight">Saved Addresses</h3>
-                  <p className="text-xs text-slate-500 mt-1">Manage delivery locations for quick ordering.</p>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Manage delivery locations with GPS pin and PIN code autofill.
+                  </p>
                 </div>
                 <button
                   onClick={() => setIsAddingAddress(true)}
@@ -481,95 +651,29 @@ export const ProfilePage: React.FC = () => {
               {isAddingAddress && (
                 <form
                   onSubmit={handleCreateAddress}
-                  className="p-5 bg-slate-50 rounded-2xl border border-slate-200 space-y-3 animate-in fade-in duration-150"
+                  className="p-5 bg-slate-50 rounded-2xl border border-slate-200 space-y-4 animate-in fade-in duration-150"
                 >
-                  <div className="flex items-center justify-between mb-2">
-                    <h4 className="text-xs font-bold text-slate-900 uppercase">New Address Details</h4>
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-bold text-slate-900 uppercase">New Delivery Address</h4>
                     <button
                       type="button"
                       onClick={() => setIsAddingAddress(false)}
-                      className="text-xs text-slate-400 hover:text-slate-700"
+                      className="text-xs text-slate-400 hover:text-slate-700 cursor-pointer"
                     >
                       Cancel
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="text-[11px] font-semibold text-slate-700 block mb-1">Full Name</label>
-                      <input
-                        type="text"
-                        required
-                        value={newAddrName}
-                        onChange={(e) => setNewAddrName(e.target.value)}
-                        placeholder="Recipient name"
-                        className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[11px] font-semibold text-slate-700 block mb-1">Phone</label>
-                      <input
-                        type="tel"
-                        required
-                        value={newAddrPhone}
-                        onChange={(e) => setNewAddrPhone(e.target.value)}
-                        placeholder="+91 98765 43210"
-                        className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="text-[11px] font-semibold text-slate-700 block mb-1">Street Address</label>
-                    <input
-                      type="text"
-                      required
-                      value={newAddrStreet}
-                      onChange={(e) => setNewAddrStreet(e.target.value)}
-                      placeholder="Building, street, area"
-                      className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-3">
-                    <div>
-                      <label className="text-[11px] font-semibold text-slate-700 block mb-1">City</label>
-                      <input
-                        type="text"
-                        required
-                        value={newAddrCity}
-                        onChange={(e) => setNewAddrCity(e.target.value)}
-                        placeholder="City"
-                        className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[11px] font-semibold text-slate-700 block mb-1">State</label>
-                      <input
-                        type="text"
-                        required
-                        value={newAddrState}
-                        onChange={(e) => setNewAddrState(e.target.value)}
-                        placeholder="State"
-                        className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[11px] font-semibold text-slate-700 block mb-1">PIN Code</label>
-                      <input
-                        type="text"
-                        required
-                        value={newAddrZip}
-                        onChange={(e) => setNewAddrZip(e.target.value)}
-                        placeholder="560038"
-                        className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl"
-                      />
-                    </div>
-                  </div>
+                  <AddressFormFields
+                    value={newAddressForm}
+                    onChange={setNewAddressForm}
+                    onNotify={addToast}
+                    showLabelSelector={true}
+                  />
 
                   <button
                     type="submit"
-                    className="py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl transition-colors"
+                    className="py-2.5 px-5 bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer"
                   >
                     Save Address
                   </button>
@@ -594,25 +698,47 @@ export const ProfilePage: React.FC = () => {
                           </span>
                         )}
                       </div>
-                      <p className="text-slate-700 font-semibold">{addr.name}</p>
-                      <p className="text-slate-500 mt-1 leading-relaxed">
-                        {addr.street}, {addr.city}, {addr.state} - {addr.zipCode}
+                      <p className="text-slate-800 font-bold">{addr.fullName || addr.name}</p>
+                      <p className="text-slate-600 mt-1 leading-relaxed">
+                        {[addr.houseNo, addr.street, addr.area].filter(Boolean).join(', ')}
                       </p>
-                      <p className="text-slate-400 mt-1">{addr.phone}</p>
+                      {addr.landmark && <p className="text-slate-500 text-[11px]">Landmark: {addr.landmark}</p>}
+                      <p className="text-slate-600 font-medium">
+                        {[addr.city, addr.district, addr.state].filter(Boolean).join(', ')} -{' '}
+                        {addr.pincode || addr.zipCode}
+                      </p>
+                      <p className="text-slate-500 mt-1">
+                        Phone: {addr.phone}
+                        {addr.alternatePhone ? ` / ${addr.alternatePhone}` : ''}
+                      </p>
+                      {addr.latitude !== undefined && addr.longitude !== undefined && (
+                        <a
+                          href={`https://www.google.com/maps?q=${addr.latitude},${addr.longitude}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-[11px] text-violet-600 hover:underline font-semibold mt-1"
+                        >
+                          <MapPin className="w-3 h-3" />
+                          <span>
+                            GPS: {addr.latitude}, {addr.longitude}
+                          </span>
+                          <ExternalLink className="w-2.5 h-2.5" />
+                        </a>
+                      )}
                     </div>
 
                     <div className="flex items-center justify-between pt-2 border-t border-slate-100">
                       {!addr.isDefault && (
                         <button
                           onClick={() => setDefaultAddress(addr.id)}
-                          className="text-violet-600 hover:text-violet-800 font-semibold text-[11px]"
+                          className="text-violet-600 hover:text-violet-800 font-semibold text-[11px] cursor-pointer"
                         >
                           Set as Default
                         </button>
                       )}
                       <button
                         onClick={() => deleteAddress(addr.id)}
-                        className="text-rose-500 hover:text-rose-700 p-1 ml-auto"
+                        className="text-rose-500 hover:text-rose-700 p-1 ml-auto cursor-pointer"
                         title="Delete address"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -624,7 +750,7 @@ export const ProfilePage: React.FC = () => {
             </div>
           )}
 
-          {/* TAB 4: SAVED WISHLIST (As in Video 00:40) */}
+          {/* TAB 4: SAVED WISHLIST */}
           {activeTab === 'wishlist' && (
             <div className="space-y-6">
               <div className="flex items-center justify-between">
@@ -645,7 +771,7 @@ export const ProfilePage: React.FC = () => {
                   <p className="text-xs text-slate-400">Save items while browsing to find them here later.</p>
                   <button
                     onClick={() => navigateTo('shop')}
-                    className="px-4 py-2 bg-violet-600 text-white text-xs font-bold rounded-xl"
+                    className="px-4 py-2 bg-violet-600 text-white text-xs font-bold rounded-xl cursor-pointer"
                   >
                     Browse Catalog
                   </button>

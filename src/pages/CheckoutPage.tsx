@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useStore } from '../context/StoreContext';
-import { Address, Order } from '../types';
+import { Address, Order, PaymentMethodType } from '../types';
+import { AddressFormFields } from '../components/common/AddressFormFields';
 import confetti from 'canvas-confetti';
 import {
   CreditCard,
@@ -10,6 +11,9 @@ import {
   Plus,
   QrCode,
   Smartphone,
+  Banknote,
+  UserCheck,
+  MapPin,
 } from 'lucide-react';
 
 export const CheckoutPage: React.FC = () => {
@@ -19,13 +23,14 @@ export const CheckoutPage: React.FC = () => {
     cartDiscount,
     cartShipping,
     cartTax,
-    cartTotal,
     appliedCoupon,
     formatPrice,
     currentUser,
     addresses,
+    addAddress,
     createOrder,
     navigateTo,
+    setAuthModalOpen,
     addToast,
   } = useStore();
 
@@ -34,24 +39,55 @@ export const CheckoutPage: React.FC = () => {
     addresses.find((a) => a.isDefault)?.id || addresses[0]?.id || 'new'
   );
 
+  // Sync default address when addresses list updates
+  useEffect(() => {
+    if (selectedAddressId === 'new' && addresses.length > 0) {
+      const def = addresses.find((a) => a.isDefault) || addresses[0];
+      if (def) setSelectedAddressId(def.id);
+    }
+  }, [addresses.length]);
+
   // New Address Form
   const [newAddress, setNewAddress] = useState<Omit<Address, 'id' | 'userId'>>({
     name: currentUser?.name || '',
+    fullName: currentUser?.name || '',
+    phone: currentUser?.phone || '',
+    alternatePhone: '',
+    email: currentUser?.email || '',
+    houseNo: '',
     street: '',
+    area: '',
+    landmark: '',
     city: '',
+    district: '',
     state: '',
     zipCode: '',
+    pincode: '',
     country: 'India',
-    phone: currentUser?.phone || '',
-    isDefault: false,
+    deliveryInstructions: '',
+    isDefault: addresses.length === 0,
     label: 'Home',
   });
+
+  useEffect(() => {
+    if (currentUser) {
+      setNewAddress((prev) => ({
+        ...prev,
+        name: prev.name || currentUser.name || '',
+        fullName: prev.fullName || currentUser.name || '',
+        phone: prev.phone || currentUser.phone || '',
+        email: prev.email || currentUser.email || '',
+      }));
+    }
+  }, [currentUser]);
+
+  const [saveNewAddressToProfile, setSaveNewAddressToProfile] = useState(true);
 
   // Shipping Method (Standard Ground)
   const shippingMethod: 'standard' = 'standard';
 
-  // Online Payment Method
-  const [paymentMethod, setPaymentMethod] = useState<'card' | 'apple_pay' | 'upi'>('card');
+  // Payment Method (includes COD + Online Payment options)
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethodType>('cod');
 
   // Card details state
   const [cardNumber, setCardNumber] = useState('4532 •••• •••• 8829');
@@ -71,7 +107,7 @@ export const CheckoutPage: React.FC = () => {
         <p className="text-xs text-slate-500">Please add items to your cart before proceeding to checkout.</p>
         <button
           onClick={() => navigateTo('shop')}
-          className="px-5 py-2.5 bg-violet-600 text-white text-xs font-bold rounded-xl"
+          className="px-5 py-2.5 bg-violet-600 text-white text-xs font-bold rounded-xl cursor-pointer"
         >
           Return to Catalog
         </button>
@@ -92,8 +128,15 @@ export const CheckoutPage: React.FC = () => {
     }
   };
 
-  const handlePlaceOrder = (e: React.FormEvent) => {
+  const handlePlaceOrder = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Require customer to be signed in at checkout (userId = auth.uid)
+    if (!currentUser) {
+      addToast('Sign In Required', 'Please sign in or create an account to complete your order.', 'info');
+      setAuthModalOpen(true);
+      return;
+    }
 
     let finalAddress: Address;
     if (selectedAddressId !== 'new') {
@@ -104,21 +147,54 @@ export const CheckoutPage: React.FC = () => {
       }
       finalAddress = existing;
     } else {
-      if (!newAddress.street || !newAddress.city || !newAddress.zipCode) {
-        addToast('Address Required', 'Please complete all address fields.', 'error');
+      const cleanPhone = (newAddress.phone || '').replace(/\D/g, '').slice(-10);
+      const cleanPin = (newAddress.zipCode || newAddress.pincode || '').replace(/\D/g, '');
+
+      if (!(newAddress.fullName || newAddress.name)?.trim()) {
+        addToast('Name Required', 'Please enter the recipient full name.', 'error');
         return;
       }
-      finalAddress = {
+      if (cleanPhone.length !== 10) {
+        addToast('Valid Phone Required', 'Please enter a valid 10-digit mobile number.', 'error');
+        return;
+      }
+      if (!newAddress.houseNo?.trim() && !newAddress.street?.trim()) {
+        addToast('Address Required', 'Please enter your house/flat number and street.', 'error');
+        return;
+      }
+      if (!newAddress.city?.trim() || !newAddress.state?.trim()) {
+        addToast('City & State Required', 'Please enter your city and state.', 'error');
+        return;
+      }
+      if (cleanPin.length !== 6) {
+        addToast('Valid PIN Code Required', 'Please enter a valid 6-digit Indian PIN code.', 'error');
+        return;
+      }
+
+      const normalizedNew: Omit<Address, 'id' | 'userId'> = {
         ...newAddress,
-        id: `addr-${Date.now()}`,
-        userId: currentUser?.id || 'guest',
+        name: (newAddress.fullName || newAddress.name).trim(),
+        fullName: (newAddress.fullName || newAddress.name).trim(),
+        phone: cleanPhone,
+        zipCode: cleanPin,
+        pincode: cleanPin,
       };
+
+      if (saveNewAddressToProfile) {
+        finalAddress = addAddress(normalizedNew);
+      } else {
+        finalAddress = {
+          ...normalizedNew,
+          id: `addr-${Date.now()}`,
+          userId: currentUser.id,
+        };
+      }
     }
 
     setIsProcessing(true);
 
-    setTimeout(() => {
-      const order = createOrder({
+    try {
+      const order = await createOrder({
         shippingAddress: finalAddress,
         shippingMethod,
         paymentMethod,
@@ -127,12 +203,16 @@ export const CheckoutPage: React.FC = () => {
       setIsProcessing(false);
       setCompletedOrder(order);
       triggerConfetti();
-      addToast('Order Placed!', `Your order #${order.orderNumber} was confirmed successfully.`, 'success');
-    }, 1200);
+      addToast('Order Placed!', `Your order #${order.orderNumber} was saved to Firestore.`, 'success');
+    } catch (err: any) {
+      setIsProcessing(false);
+      addToast('Order Error', err?.message || 'Could not place order. Please try again.', 'error');
+    }
   };
 
   // ORDER CONFIRMATION VIEW
   if (completedOrder) {
+    const addr = completedOrder.shippingAddress;
     return (
       <div className="max-w-3xl mx-auto px-4 sm:px-6 py-12 space-y-8 animate-in fade-in zoom-in-95 duration-200">
         <div className="text-center space-y-3">
@@ -140,14 +220,14 @@ export const CheckoutPage: React.FC = () => {
             <CheckCircle2 className="w-9 h-9" />
           </div>
           <span className="text-xs font-bold uppercase tracking-wider text-emerald-600">
-            Order Confirmed & Processing
+            Order Confirmed & Saved
           </span>
           <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">
             Thank you, {completedOrder.customerName}!
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 max-w-md mx-auto">
-            Order <strong className="text-slate-900 font-mono">#{completedOrder.orderNumber}</strong> has been received. A receipt has been dispatched to{' '}
-            <span className="text-slate-800 font-medium">{completedOrder.customerEmail}</span>.
+            Order <strong className="text-slate-900 font-mono">#{completedOrder.orderNumber}</strong> has been recorded. Updates will be sent to{' '}
+            <span className="text-slate-800 font-medium">{completedOrder.customerEmail || completedOrder.customerPhone}</span>.
           </p>
         </div>
 
@@ -198,7 +278,8 @@ export const CheckoutPage: React.FC = () => {
             <div className="text-left sm:text-right">
               <span className="text-xs text-slate-400 block">Payment Method</span>
               <span className="text-xs font-bold text-slate-800 uppercase">
-                {completedOrder.paymentMethod} · {completedOrder.paymentStatus}
+                {completedOrder.paymentMethod === 'cod' ? 'Cash on Delivery (COD)' : completedOrder.paymentMethod} ·{' '}
+                {completedOrder.paymentStatus.replace(/_/g, ' ')}
               </span>
             </div>
           </div>
@@ -220,7 +301,7 @@ export const CheckoutPage: React.FC = () => {
                     <div>
                       <strong className="text-slate-900 block font-semibold">{item.productName}</strong>
                       <span className="text-slate-500 text-[11px]">
-                        {item.color ? `Color: ${item.color} · ` : ''}Qty: {item.quantity}
+                        {item.color ? `Variant: ${item.color} · ` : ''}Qty: {item.quantity}
                       </span>
                     </div>
                   </div>
@@ -235,13 +316,17 @@ export const CheckoutPage: React.FC = () => {
           {/* Shipping Address Recap */}
           <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 text-xs space-y-1">
             <h4 className="font-bold text-slate-900">Delivery Address</h4>
-            <p className="text-slate-600">
-              {completedOrder.shippingAddress.name} ({completedOrder.shippingAddress.phone})
+            <p className="text-slate-700 font-semibold">
+              {addr.fullName || addr.name} · {addr.phone}
+              {addr.alternatePhone ? ` / ${addr.alternatePhone}` : ''}
             </p>
-            <p className="text-slate-500">
-              {completedOrder.shippingAddress.street}, {completedOrder.shippingAddress.city},{' '}
-              {completedOrder.shippingAddress.state} - {completedOrder.shippingAddress.zipCode},{' '}
-              {completedOrder.shippingAddress.country}
+            <p className="text-slate-600">
+              {[addr.houseNo, addr.street, addr.area].filter(Boolean).join(', ')}
+            </p>
+            {addr.landmark && <p className="text-slate-500">Landmark: {addr.landmark}</p>}
+            <p className="text-slate-600 font-medium">
+              {[addr.city, addr.district, addr.state].filter(Boolean).join(', ')} - {addr.pincode || addr.zipCode},{' '}
+              {addr.country}
             </p>
           </div>
 
@@ -264,11 +349,11 @@ export const CheckoutPage: React.FC = () => {
               </span>
             </div>
             <div className="flex justify-between">
-              <span>Tax (GST 12%)</span>
+              <span>Tax (GST)</span>
               <span className="tabular-nums font-semibold text-slate-800">{formatPrice(completedOrder.tax)}</span>
             </div>
             <div className="border-t border-slate-200 pt-2 flex justify-between text-base font-extrabold text-slate-900">
-              <span>Total Paid</span>
+              <span>{completedOrder.paymentMethod === 'cod' ? 'Total Payable on Delivery' : 'Total Paid'}</span>
               <span className="text-violet-700 tabular-nums">{formatPrice(completedOrder.totalAmount)}</span>
             </div>
           </div>
@@ -277,13 +362,13 @@ export const CheckoutPage: React.FC = () => {
           <div className="pt-4 flex flex-col sm:flex-row gap-3">
             <button
               onClick={() => navigateTo('profile')}
-              className="flex-1 py-3 bg-violet-600 hover:bg-violet-700 text-white text-xs sm:text-sm font-bold rounded-xl shadow-md transition-colors"
+              className="flex-1 py-3 bg-violet-600 hover:bg-violet-700 text-white text-xs sm:text-sm font-bold rounded-xl shadow-md transition-colors cursor-pointer"
             >
               Track in My Orders
             </button>
             <button
               onClick={() => navigateTo('shop')}
-              className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs sm:text-sm font-bold rounded-xl transition-colors"
+              className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs sm:text-sm font-bold rounded-xl transition-colors cursor-pointer"
             >
               Continue Shopping
             </button>
@@ -307,6 +392,30 @@ export const CheckoutPage: React.FC = () => {
           Complete your delivery details and choose your preferred payment method.
         </p>
       </div>
+
+      {/* Sign-In Notice Banner if Customer is Not Logged In */}
+      {!currentUser && (
+        <div className="p-4 sm:p-5 rounded-3xl bg-amber-50 border border-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+              <UserCheck className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-xs sm:text-sm font-bold text-slate-900">Sign In Required to Place Order</h3>
+              <p className="text-xs text-slate-600">
+                Please sign in or register so your order is linked to your account for live tracking in "My Orders".
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setAuthModalOpen(true)}
+            className="px-4 py-2.5 bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold rounded-xl shadow-xs shrink-0 cursor-pointer"
+          >
+            Sign In / Register
+          </button>
+        </div>
+      )}
 
       <form onSubmit={handlePlaceOrder} className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
         {/* Left Form: Details, Shipping & Payment (7 Cols) */}
@@ -345,9 +454,20 @@ export const CheckoutPage: React.FC = () => {
                           </span>
                         )}
                       </div>
-                      <p className="text-slate-600 font-medium truncate">{addr.name}</p>
-                      <p className="text-slate-500 text-[11px] line-clamp-2 mt-0.5">{addr.street}, {addr.city}</p>
-                      <p className="text-slate-400 text-[11px] mt-1">{addr.phone}</p>
+                      <p className="text-slate-700 font-semibold truncate">{addr.fullName || addr.name}</p>
+                      <p className="text-slate-500 text-[11px] line-clamp-2 mt-0.5">
+                        {[addr.houseNo, addr.street, addr.area, addr.city, addr.state, addr.pincode || addr.zipCode]
+                          .filter(Boolean)
+                          .join(', ')}
+                      </p>
+                      <p className="text-slate-400 text-[11px] mt-1 flex items-center justify-between">
+                        <span>{addr.phone}</span>
+                        {addr.latitude !== undefined && (
+                          <span className="text-[10px] text-emerald-600 font-semibold flex items-center gap-0.5">
+                            <MapPin className="w-3 h-3" /> GPS
+                          </span>
+                        )}
+                      </p>
                     </div>
                   ))}
 
@@ -367,81 +487,27 @@ export const CheckoutPage: React.FC = () => {
               </div>
             )}
 
-            {/* New Address Fields */}
+            {/* Complete Indian Address Fields + Use Current Location */}
             {selectedAddressId === 'new' && (
               <div className="pt-2 space-y-3 animate-in fade-in duration-200">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-xs font-semibold text-slate-700 block mb-1">Full Name</label>
-                    <input
-                      type="text"
-                      required
-                      value={newAddress.name}
-                      onChange={(e) => setNewAddress({ ...newAddress, name: e.target.value })}
-                      placeholder="Receiver's name"
-                      className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs font-semibold text-slate-700 block mb-1">Phone Number</label>
-                    <input
-                      type="tel"
-                      required
-                      value={newAddress.phone}
-                      onChange={(e) => setNewAddress({ ...newAddress, phone: e.target.value })}
-                      placeholder="+91 98765 43210"
-                      className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500"
-                    />
-                  </div>
-                </div>
+                <AddressFormFields
+                  value={newAddress}
+                  onChange={setNewAddress}
+                  onNotify={addToast}
+                  showLabelSelector={true}
+                />
 
-                <div>
-                  <label className="text-xs font-semibold text-slate-700 block mb-1">Street Address</label>
-                  <input
-                    type="text"
-                    required
-                    value={newAddress.street}
-                    onChange={(e) => setNewAddress({ ...newAddress, street: e.target.value })}
-                    placeholder="House/Apartment #, Building, Street, Area"
-                    className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500"
-                  />
-                </div>
-
-                <div className="grid grid-cols-3 gap-3">
-                  <div>
-                    <label className="text-xs font-semibold text-slate-700 block mb-1">City</label>
+                {currentUser && (
+                  <label className="flex items-center gap-2 pt-1 text-xs text-slate-600 cursor-pointer">
                     <input
-                      type="text"
-                      required
-                      value={newAddress.city}
-                      onChange={(e) => setNewAddress({ ...newAddress, city: e.target.value })}
-                      placeholder="City"
-                      className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500"
+                      type="checkbox"
+                      checked={saveNewAddressToProfile}
+                      onChange={(e) => setSaveNewAddressToProfile(e.target.checked)}
+                      className="rounded accent-violet-600 w-3.5 h-3.5"
                     />
-                  </div>
-                  <div>
-                    <label className="text-xs font-semibold text-slate-700 block mb-1">State</label>
-                    <input
-                      type="text"
-                      required
-                      value={newAddress.state}
-                      onChange={(e) => setNewAddress({ ...newAddress, state: e.target.value })}
-                      placeholder="State"
-                      className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs font-semibold text-slate-700 block mb-1">PIN / Postal Code</label>
-                    <input
-                      type="text"
-                      required
-                      value={newAddress.zipCode}
-                      onChange={(e) => setNewAddress({ ...newAddress, zipCode: e.target.value })}
-                      placeholder="PIN Code"
-                      className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500"
-                    />
-                  </div>
-                </div>
+                    <span>Save this address to my address book for future orders</span>
+                  </label>
+                )}
               </div>
             )}
           </div>
@@ -465,8 +531,8 @@ export const CheckoutPage: React.FC = () => {
                   className="mt-0.5 accent-violet-600"
                 />
                 <div>
-                  <span className="font-bold text-slate-900 block">Standard Ground</span>
-                  <span className="text-slate-500 text-[11px] block mt-0.5">3-5 Business Days Delivery</span>
+                  <span className="font-bold text-slate-900 block">Standard Ground Delivery</span>
+                  <span className="text-slate-500 text-[11px] block mt-0.5">3-5 Business Days Pan-India Delivery</span>
                   <span className="font-bold text-emerald-600 text-xs mt-1 block">
                     {cartShipping === 0 ? 'FREE' : formatPrice(cartShipping)}
                   </span>
@@ -484,25 +550,25 @@ export const CheckoutPage: React.FC = () => {
               <h3 className="text-sm font-bold text-slate-900">Payment Option</h3>
             </div>
 
-            {/* Payment Selector Tabs (Online Payment Only) */}
-            <div className="grid grid-cols-3 gap-2">
+            {/* Payment Selector Tabs (COD + Online Options) */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               <button
                 type="button"
-                onClick={() => setPaymentMethod('card')}
-                className={`p-3 rounded-2xl border text-xs font-semibold flex flex-col items-center gap-1.5 transition-all ${
-                  paymentMethod === 'card'
+                onClick={() => setPaymentMethod('cod')}
+                className={`p-3 rounded-2xl border text-xs font-semibold flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
+                  paymentMethod === 'cod'
                     ? 'border-violet-600 bg-violet-50 text-violet-700 ring-2 ring-violet-500/20'
                     : 'border-slate-200 hover:bg-slate-50 text-slate-600'
                 }`}
               >
-                <CreditCard className="w-5 h-5" />
-                <span>Card</span>
+                <Banknote className="w-5 h-5" />
+                <span>Cash on Delivery</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => setPaymentMethod('upi')}
-                className={`p-3 rounded-2xl border text-xs font-semibold flex flex-col items-center gap-1.5 transition-all ${
+                className={`p-3 rounded-2xl border text-xs font-semibold flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
                   paymentMethod === 'upi'
                     ? 'border-violet-600 bg-violet-50 text-violet-700 ring-2 ring-violet-500/20'
                     : 'border-slate-200 hover:bg-slate-50 text-slate-600'
@@ -514,8 +580,21 @@ export const CheckoutPage: React.FC = () => {
 
               <button
                 type="button"
+                onClick={() => setPaymentMethod('card')}
+                className={`p-3 rounded-2xl border text-xs font-semibold flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
+                  paymentMethod === 'card'
+                    ? 'border-violet-600 bg-violet-50 text-violet-700 ring-2 ring-violet-500/20'
+                    : 'border-slate-200 hover:bg-slate-50 text-slate-600'
+                }`}
+              >
+                <CreditCard className="w-5 h-5" />
+                <span>Card</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setPaymentMethod('apple_pay')}
-                className={`p-3 rounded-2xl border text-xs font-semibold flex flex-col items-center gap-1.5 transition-all ${
+                className={`p-3 rounded-2xl border text-xs font-semibold flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
                   paymentMethod === 'apple_pay'
                     ? 'border-violet-600 bg-violet-50 text-violet-700 ring-2 ring-violet-500/20'
                     : 'border-slate-200 hover:bg-slate-50 text-slate-600'
@@ -525,6 +604,15 @@ export const CheckoutPage: React.FC = () => {
                 <span>Instant Pay</span>
               </button>
             </div>
+
+            {paymentMethod === 'cod' && (
+              <div className="p-4 rounded-2xl bg-emerald-50/70 border border-emerald-200 text-xs space-y-1">
+                <strong className="text-emerald-950 block font-bold">Pay by Cash or UPI at Doorstep</strong>
+                <p className="text-emerald-800">
+                  Pay {formatPrice(calculatedTotal)} directly to the courier partner when your package is delivered.
+                </p>
+              </div>
+            )}
 
             {/* Simulated Card Fields */}
             {paymentMethod === 'card' && (
@@ -644,7 +732,7 @@ export const CheckoutPage: React.FC = () => {
                 </span>
               </div>
               <div className="flex justify-between">
-                <span>Tax (GST 12%)</span>
+                <span>Tax (GST)</span>
                 <span className="font-semibold text-slate-900 tabular-nums">{formatPrice(cartTax)}</span>
               </div>
               <div className="border-t border-slate-200 pt-2 flex justify-between text-base font-extrabold text-slate-900">
@@ -662,19 +750,23 @@ export const CheckoutPage: React.FC = () => {
               {isProcessing ? (
                 <>
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  <span>Authorizing Order...</span>
+                  <span>Saving Order...</span>
                 </>
               ) : (
                 <>
                   <Lock className="w-4 h-4" />
-                  <span>Place Order ({formatPrice(calculatedTotal)})</span>
+                  <span>
+                    {paymentMethod === 'cod'
+                      ? `Place COD Order (${formatPrice(calculatedTotal)})`
+                      : `Pay & Place Order (${formatPrice(calculatedTotal)})`}
+                  </span>
                 </>
               )}
             </button>
 
             <div className="flex items-center justify-center gap-2 text-[11px] text-slate-400 text-center">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
-              <span>Free returns within 7 days · Official 1-Year Guarantee</span>
+              <span>Free returns within 7 days · Official Quality Guarantee</span>
             </div>
           </div>
         </div>

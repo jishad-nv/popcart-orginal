@@ -12,6 +12,7 @@ export interface Product {
   id: string;
   sourceProductId?: string;
   sourceUrl?: string;
+  supplierSku?: string;
   name: string;
   slug: string;
   brand: string;
@@ -49,6 +50,7 @@ export interface ImportPreviewProduct {
   id: string;
   sourceProductId: string;
   sourceUrl?: string;
+  supplierSku?: string;
   name: string;
   slug: string;
   images: string[];
@@ -114,6 +116,8 @@ export interface CartItem {
   productId: string;
   product: Product;
   selectedColor?: string;
+  selectedSize?: string;
+  selectedVariantTitle?: string;
   quantity: number;
 }
 
@@ -136,27 +140,56 @@ export interface Address {
   id: string;
   userId: string;
   name: string;
+  fullName?: string;
+  phone: string;
+  alternatePhone?: string;
+  email?: string;
+  houseNo?: string;
   street: string;
+  area?: string;
+  landmark?: string;
   city: string;
+  district?: string;
   state: string;
   zipCode: string;
+  pincode?: string;
   country: string;
-  phone: string;
+  latitude?: number;
+  longitude?: number;
+  deliveryInstructions?: string;
   isDefault: boolean;
   label: 'Home' | 'Work' | 'Other';
 }
 
 export interface OrderItem {
   productId: string;
+  sourceProductId?: string;
+  supplierSku?: string;
+  sku?: string;
   productName: string;
   productImage: string;
   brand: string;
   color?: string;
+  size?: string;
+  variantTitle?: string;
+  costPrice?: number;
   price: number;
   quantity: number;
 }
 
-export type OrderStatus = 'placed' | 'confirmed' | 'processing' | 'shipped' | 'out_for_delivery' | 'delivered' | 'cancelled';
+export type OrderStatus =
+  | 'placed'
+  | 'confirmed'
+  | 'processing'
+  | 'packed'
+  | 'shipped'
+  | 'out_for_delivery'
+  | 'delivered'
+  | 'cancelled'
+  | 'returned';
+
+export type PaymentMethodType = 'cod' | 'card' | 'apple_pay' | 'upi';
+export type PaymentStatusType = 'paid' | 'pending' | 'cod_pending' | 'failed' | 'refunded';
 
 export interface Order {
   id: string;
@@ -174,11 +207,15 @@ export interface Order {
   couponCode?: string;
   tax: number;
   totalAmount: number;
-  paymentMethod: 'card' | 'apple_pay' | 'upi';
-  paymentStatus: 'paid' | 'pending';
+  paymentMethod: PaymentMethodType;
+  paymentStatus: PaymentStatusType;
   orderStatus: OrderStatus;
+  trackingNumber?: string;
+  courierName?: string;
+  adminNotes?: string;
   statusHistory: { status: OrderStatus; timestamp: string; note: string }[];
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface Coupon {
@@ -202,6 +239,20 @@ export interface NotificationItem {
   type: 'order' | 'discount' | 'system';
 }
 
+export interface HomepageCustomization {
+  trendingTitle?: string;
+  trendingSubtitle?: string;
+  trendingProductIds?: string[];
+  popularTitle?: string;
+  popularSubtitle?: string;
+  popularProductIds?: string[];
+  newArrivalsTitle?: string;
+  newArrivalsSubtitle?: string;
+  newArrivalsProductIds?: string[];
+  autoPlayTrending?: boolean;
+  trendingSpeedMs?: number;
+}
+
 export interface StoreSettings {
   storeName: string;
   tagline: string;
@@ -215,4 +266,5 @@ export interface StoreSettings {
     text: string;
     couponHighlight: string;
   };
+  homepageConfig?: HomepageCustomization;
 }

@@ -6,24 +6,59 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
-        "title": { "type": "string", "maxLength": 200 },
+        "name": { "type": "string", "maxLength": 300 },
         "price": { "type": "number" },
-        "description": { "type": "string", "maxLength": 2000 },
-        "category": { "type": "string", "maxLength": 100 },
-        "stock": { "type": "number" }
+        "originalPrice": { "type": "number" },
+        "costPrice": { "type": "number" },
+        "description": { "type": "string", "maxLength": 10000 },
+        "categoryId": { "type": "string", "maxLength": 100 },
+        "stockQuantity": { "type": "number" },
+        "isTrending": { "type": "boolean" },
+        "isFeatured": { "type": "boolean" },
+        "isNewArrival": { "type": "boolean" },
+        "supplierSku": { "type": "string", "maxLength": 128 },
+        "sku": { "type": "string", "maxLength": 128 }
       },
-      "required": ["id", "title", "price", "category"]
+      "required": ["id", "name", "price", "categoryId"]
     },
     "Order": {
       "title": "Order",
-      "description": "Customer order record",
+      "description": "Customer order record with complete snapshot",
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
+        "orderNumber": { "type": "string", "maxLength": 128 },
         "userId": { "type": "string", "maxLength": 128 },
-        "total": { "type": "number" }
+        "customerName": { "type": "string", "maxLength": 200 },
+        "customerEmail": { "type": "string", "maxLength": 200 },
+        "customerPhone": { "type": "string", "maxLength": 50 },
+        "subtotal": { "type": "number" },
+        "shippingCost": { "type": "number" },
+        "discountAmount": { "type": "number" },
+        "tax": { "type": "number" },
+        "totalAmount": { "type": "number" },
+        "paymentMethod": { "type": "string", "enum": ["cod", "card", "upi", "apple_pay"] },
+        "paymentStatus": { "type": "string", "enum": ["paid", "pending", "cod_pending", "failed", "refunded"] },
+        "orderStatus": { "type": "string", "enum": ["placed", "confirmed", "processing", "packed", "shipped", "out_for_delivery", "delivered", "cancelled", "returned"] },
+        "trackingNumber": { "type": "string", "maxLength": 128 },
+        "courierName": { "type": "string", "maxLength": 128 },
+        "adminNotes": { "type": "string", "maxLength": 2000 },
+        "createdAt": { "type": "string", "maxLength": 64 }
       },
-      "required": ["id", "userId", "total"]
+      "required": ["id", "orderNumber", "userId", "customerName", "totalAmount", "orderStatus", "createdAt"]
+    },
+    "StoreSettings": {
+      "title": "StoreSettings",
+      "description": "Storefront configuration and homepage featured sections",
+      "type": "object",
+      "properties": {
+        "storeName": { "type": "string", "maxLength": 100 },
+        "tagline": { "type": "string", "maxLength": 250 },
+        "currency": { "type": "string", "enum": ["INR", "USD"] },
+        "freeShippingThreshold": { "type": "number" },
+        "standardShippingFee": { "type": "number" }
+      },
+      "required": ["storeName", "currency"]
     }
   },
   "firestore": {
@@ -33,7 +68,11 @@
     },
     "/orders/{orderId}": {
       "schema": { "$ref": "Order" },
-      "description": "Customer orders"
+      "description": "Customer orders stored with doc id = orderNumber"
+    },
+    "/settings/{settingId}": {
+      "schema": { "$ref": "StoreSettings" },
+      "description": "Global storefront and homepage configuration"
     }
   }
 }

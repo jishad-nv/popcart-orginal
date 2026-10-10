@@ -1,14 +1,11 @@
-import React, { useRef } from 'react';
+import React, { useMemo } from 'react';
 import { useStore } from '../context/StoreContext';
-import { TrendingCard } from '../components/product/TrendingCard';
 import { TrendingCarousel } from '../components/home/TrendingCarousel';
 import { ShopByPriceSection } from '../components/home/ShopByPriceSection';
 import { ProductCard } from '../components/product/ProductCard';
 import {
   Sparkles,
   ArrowRight,
-  ChevronLeft,
-  ChevronRight,
   Headphones,
   Smartphone,
   Watch,
@@ -17,9 +14,7 @@ import {
   Home,
   Shield,
   LayoutGrid,
-  Tag,
   Star,
-  Quote,
   UtensilsCrossed,
   Archive,
   Lamp,
@@ -40,9 +35,7 @@ export const HomePage: React.FC = () => {
     products,
     categories,
     navigateTo,
-    selectedCategoryFilter,
     settings,
-    formatPrice,
     reviews,
   } = useStore();
 
@@ -96,9 +89,83 @@ export const HomePage: React.FC = () => {
     }
   };
 
-  const trendingProducts = products.filter((p) => p.isTrending).slice(0, 12);
-  const popularProducts = products.slice(0, 8);
-  const newArrivals = products.filter((p) => p.isNewArrival || p.isFeatured).slice(0, 4);
+  // Only show active, in-stock products with a valid primary image on the homepage
+  const activeProducts = useMemo(() => {
+    return products.filter(
+      (p) =>
+        (p.status || 'active') === 'active' &&
+        p.inStock !== false &&
+        Array.isArray(p.images) &&
+        p.images.length > 0 &&
+        Boolean(p.images[0])
+    );
+  }, [products]);
+
+  const hpConfig = settings.homepageConfig || {};
+
+  // 1. Discover What's Trending products (admin custom order or isTrending flag fallback)
+  const trendingProducts = useMemo(() => {
+    if (Array.isArray(hpConfig.trendingProductIds) && hpConfig.trendingProductIds.length > 0) {
+      const map = new Map(activeProducts.map((p) => [p.id, p]));
+      const ordered = hpConfig.trendingProductIds
+        .map((id) => map.get(id))
+        .filter((p): p is NonNullable<typeof p> => Boolean(p));
+      if (ordered.length > 0) return ordered.slice(0, 12);
+    }
+    const flagged = activeProducts.filter((p) => p.isTrending);
+    if (flagged.length >= 6) return flagged.slice(0, 12);
+    // Fallback to top active products if fewer than 6 are flagged
+    const combined = [...flagged];
+    for (const p of activeProducts) {
+      if (combined.length >= 12) break;
+      if (!combined.some((item) => item.id === p.id)) {
+        combined.push(p);
+      }
+    }
+    return combined;
+  }, [activeProducts, hpConfig.trendingProductIds]);
+
+  // 2. Popular & Trending Products (admin custom order or isFeatured / top 8 fallback)
+  const popularProducts = useMemo(() => {
+    if (Array.isArray(hpConfig.popularProductIds) && hpConfig.popularProductIds.length > 0) {
+      const map = new Map(activeProducts.map((p) => [p.id, p]));
+      const ordered = hpConfig.popularProductIds
+        .map((id) => map.get(id))
+        .filter((p): p is NonNullable<typeof p> => Boolean(p));
+      if (ordered.length > 0) return ordered.slice(0, 12);
+    }
+    const featured = activeProducts.filter((p) => p.isFeatured);
+    if (featured.length >= 8) return featured.slice(0, 8);
+    const combined = [...featured];
+    for (const p of activeProducts) {
+      if (combined.length >= 8) break;
+      if (!combined.some((item) => item.id === p.id)) {
+        combined.push(p);
+      }
+    }
+    return combined;
+  }, [activeProducts, hpConfig.popularProductIds]);
+
+  // 3. New Arrivals (admin custom order or isNewArrival fallback)
+  const newArrivals = useMemo(() => {
+    if (Array.isArray(hpConfig.newArrivalsProductIds) && hpConfig.newArrivalsProductIds.length > 0) {
+      const map = new Map(activeProducts.map((p) => [p.id, p]));
+      const ordered = hpConfig.newArrivalsProductIds
+        .map((id) => map.get(id))
+        .filter((p): p is NonNullable<typeof p> => Boolean(p));
+      if (ordered.length > 0) return ordered.slice(0, 8);
+    }
+    const arrivals = activeProducts.filter((p) => p.isNewArrival);
+    if (arrivals.length >= 4) return arrivals.slice(0, 8);
+    const combined = [...arrivals];
+    for (const p of activeProducts) {
+      if (combined.length >= 4) break;
+      if (!combined.some((item) => item.id === p.id)) {
+        combined.push(p);
+      }
+    }
+    return combined;
+  }, [activeProducts, hpConfig.newArrivalsProductIds]);
 
   // Gradient themes for carousel cards
   const gradients = [
@@ -117,15 +184,21 @@ export const HomePage: React.FC = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center max-w-xl mx-auto mb-4 sm:mb-6">
             <h1 className="text-2xl sm:text-3xl md:text-4xl font-extrabold tracking-tight text-slate-900 leading-tight">
-              Discover What's Trending
+              {hpConfig.trendingTitle || "Discover What's Trending"}
             </h1>
             <p className="text-xs sm:text-sm text-slate-500 mt-1 sm:mt-1.5">
-              Discover useful home, kitchen and lifestyle products at honest prices.
+              {hpConfig.trendingSubtitle ||
+                'Discover useful home, kitchen and lifestyle products at honest prices.'}
             </p>
           </div>
 
           {/* Smooth Infinite-Loop Horizontal Carousel */}
-          <TrendingCarousel products={trendingProducts} gradients={gradients} />
+          <TrendingCarousel
+            products={trendingProducts}
+            gradients={gradients}
+            autoPlay={hpConfig.autoPlayTrending !== false}
+            speedMs={hpConfig.trendingSpeedMs || 2800}
+          />
         </div>
       </section>
 
@@ -189,10 +262,11 @@ export const HomePage: React.FC = () => {
           <div className="flex items-center justify-between mb-4 sm:mb-5">
             <div>
               <h2 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
-                Popular & Trending Products
+                {hpConfig.popularTitle || 'Popular & Trending Products'}
               </h2>
               <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
-                Hand-picked flagship essentials engineered for everyday excellence.
+                {hpConfig.popularSubtitle ||
+                  'Hand-picked flagship essentials engineered for everyday excellence.'}
               </p>
             </div>
             <button
@@ -219,10 +293,10 @@ export const HomePage: React.FC = () => {
             <div>
               <span className="text-xs font-bold uppercase tracking-wider text-violet-600 flex items-center gap-1.5">
                 <Sparkles className="w-3.5 h-3.5" />
-                Freshly Dropped
+                {hpConfig.newArrivalsSubtitle || 'Freshly Dropped'}
               </span>
               <h2 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight mt-0.5">
-                New Arrivals
+                {hpConfig.newArrivalsTitle || 'New Arrivals'}
               </h2>
             </div>
             <button

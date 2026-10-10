@@ -39,20 +39,20 @@ export const InfoPages: React.FC = () => {
 
   const faqs = [
     {
-      q: 'How fast is express delivery dispatched?',
-      a: 'All orders placed with Express Shipping before 3:00 PM IST are packaged and handed over to courier dispatch on the same business day. Delivery across major metro locations takes 24 to 48 hours.',
+      q: 'How long does shipping take?',
+      a: 'Orders are processed in 1-3 business days and delivered within 5-7 business days after dispatch. Tracking details are shared via email once the order is shipped.',
     },
     {
-      q: 'What is covered under the 1-Year Official Warranty?',
-      a: 'Our 1-Year Comprehensive Warranty covers any manufacturing defect, driver imbalance, hardware failure, battery degradation over 25%, and internal circuitry faults. Accidental physical drops or water immersion beyond rated IPX standards are excluded.',
+      q: 'What is the return/refund policy?',
+      a: 'We provide returns or replacements for damaged, defective, or incorrect items. Please report such issues within 48 hours of delivery, supported by clear photos or an unboxing video. Refunds are processed to the original payment method after verification. We do not accept returns for change of mind.',
     },
     {
-      q: 'How does the 7-day hassle-free replacement work?',
-      a: 'If you receive an item with any defect or if it does not fit your ergonomic requirements, you can initiate a return or replacement ticket from your Account > My Orders page. Our courier will pick up the item and dispatch a replacement or full refund.',
+      q: 'What payment methods do you accept?',
+      a: 'We accept online payments via UPI and other methods integrated through our secure Razorpay gateway. We also offer Cash on Delivery (COD) on eligible orders.',
     },
     {
-      q: 'Are the products authentic and original?',
-      a: '100% yes. We partner directly with verified electronics manufacturers and maintain strict quality inspection benchmarks at our fulfillment hubs before shipment.',
+      q: 'Are your products authentic?',
+      a: 'Yes, we curate and source high-quality products. We ensure that all items listed meet our quality standards.',
     },
   ];
 
@@ -263,15 +263,15 @@ export const InfoPages: React.FC = () => {
             <h1 className="text-2xl font-bold text-slate-900">Shipping & Delivery Policy</h1>
           </div>
           <p>
-            At {settings.storeName}, we ensure swift, insured, and tracked dispatch across all domestic and international destinations.
+            At {settings.storeName}, we ensure tracked and reliable delivery across India.
           </p>
-          <h3 className="text-sm font-bold text-slate-900 pt-2">1. Free Shipping Eligibility</h3>
+          <h3 className="text-sm font-bold text-slate-900 pt-2">1. Delivery Timelines</h3>
           <p>
-            All orders with an item total exceeding <strong>{settings.currency === 'INR' ? '₹1,999' : '$50'}</strong> qualify for complimentary Standard Ground Shipping.
+            Orders are typically processed within 1-3 business days and are delivered in approximately 5-7 business days after dispatch. Once your order has shipped, tracking information will be shared with you to monitor the delivery.
           </p>
-          <h3 className="text-sm font-bold text-slate-900 pt-2">2. Package Tracking</h3>
+          <h3 className="text-sm font-bold text-slate-900 pt-2">2. Free Shipping Eligibility</h3>
           <p>
-            As soon as your shipment is picked up by the logistics carrier, an SMS and email with live GPS tracking details will be dispatched.
+            All orders with an item total exceeding <strong>{settings.currency === 'INR' ? '₹1,999' : '$50'}</strong> qualify for complimentary Standard Shipping.
           </p>
         </div>
       )}
@@ -284,15 +284,15 @@ export const InfoPages: React.FC = () => {
             <h1 className="text-2xl font-bold text-slate-900">7-Day Return & Refund Policy</h1>
           </div>
           <p>
-            We stand behind every piece of hardware we build. If you are not completely satisfied with your purchase, you may initiate a return within 7 calendar days of delivery.
+            We take pride in the quality of the products we curate. Returns or replacements are only accepted for damaged, defective, or incorrect items, and must be reported within 48 hours of delivery.
           </p>
-          <h3 className="text-sm font-bold text-slate-900 pt-2">1. Return Guidelines</h3>
+          <h3 className="text-sm font-bold text-slate-900 pt-2">1. Reporting Issues</h3>
           <p>
-            Products must be returned in original condition with included accessories, packaging, and warranty cards.
+            Please provide photos or an unboxing video to support your claim regarding damaged, defective, or incorrect items.
           </p>
-          <h3 className="text-sm font-bold text-slate-900 pt-2">2. Instant Refund Timelines</h3>
+          <h3 className="text-sm font-bold text-slate-900 pt-2">2. Refund Process</h3>
           <p>
-            Once our inspection team verifies the return at the hub, refunds are credited back to the original payment method (Cards/UPI) within 24 to 72 business hours.
+            Verified claims will be processed as a refund to the original payment method. We do not accept returns for change of mind. Undelivered orders are eligible for a full refund.
           </p>
         </div>
       )}

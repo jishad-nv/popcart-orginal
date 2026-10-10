@@ -28,6 +28,8 @@ export const Header: React.FC = () => {
     isLoggedIn,
     isAdmin,
     isLoggingOut,
+    selectedCategoryFilter,
+    categories,
     logout,
     notifications,
     unreadNotificationsCount,
@@ -61,12 +63,35 @@ export const Header: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const navLinks = [
-    { label: 'Home', page: 'home' as const },
-    { label: 'Shop All', page: 'shop' as const },
-    { label: 'Categories', page: 'shop' as const, categoryId: 'audio' },
-    { label: 'Audio', page: 'shop' as const, categoryId: 'audio' },
-    { label: 'My Orders', page: 'profile' as const },
+  const [isCategoryMenuOpen, setIsCategoryMenuOpen] = useState(false);
+  const categoryMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const closeCategoryMenu = (e: MouseEvent) => {
+      if (categoryMenuRef.current && !categoryMenuRef.current.contains(e.target as Node)) {
+        setIsCategoryMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', closeCategoryMenu);
+    return () => document.removeEventListener('mousedown', closeCategoryMenu);
+  }, []);
+
+  // Exactly one nav item is highlighted at a time
+  const onShop = currentPage === 'shop';
+  const activeCategory = onShop ? selectedCategoryFilter || '' : '';
+
+  const navLinks: {
+    label: string;
+    page: 'home' | 'shop' | 'profile';
+    categoryId?: string;
+    active?: boolean;
+    menu?: boolean;
+  }[] = [
+    { label: 'Home', page: 'home', active: currentPage === 'home' },
+    { label: 'Shop All', page: 'shop', categoryId: '', active: onShop && !activeCategory },
+    { label: 'Categories', page: 'shop', menu: true },
+    { label: 'Kitchen', page: 'shop', categoryId: 'kitchen', active: activeCategory === 'kitchen' },
+    { label: 'My Orders', page: 'profile', active: currentPage === 'profile' },
   ];
 
   return (
@@ -87,15 +112,45 @@ export const Header: React.FC = () => {
         {/* Zone 2: 4-6 text navigation links, centered */}
         <nav className="hidden md:flex items-center justify-center gap-7 text-sm font-medium text-slate-600 flex-1">
           {navLinks.map((link) => {
-            const isActive =
-              currentPage === link.page &&
-              (!link.categoryId || true); // subtle highlight
+            if (link.menu) {
+              const categoriesActive = !!activeCategory && activeCategory !== 'kitchen';
+              return (
+                <div key={link.label} ref={categoryMenuRef} className="relative">
+                  <button
+                    onClick={() => setIsCategoryMenuOpen((open) => !open)}
+                    className={`transition-colors text-left hover:text-violet-700 ${
+                      categoriesActive || isCategoryMenuOpen ? 'text-violet-700 font-semibold' : 'text-slate-600'
+                    }`}
+                  >
+                    Categories ▾
+                  </button>
+                  {isCategoryMenuOpen && (
+                    <div className="absolute left-1/2 -translate-x-1/2 top-full mt-3 w-52 bg-white border border-slate-200 rounded-2xl shadow-lg py-2 z-50">
+                      {categories.map((cat) => (
+                        <button
+                          key={cat.id}
+                          onClick={() => {
+                            setIsCategoryMenuOpen(false);
+                            navigateTo('shop', { categoryId: cat.id });
+                          }}
+                          className={`w-full text-left px-4 py-2 text-sm hover:bg-slate-50 ${
+                            activeCategory === cat.id ? 'text-violet-700 font-semibold' : 'text-slate-700'
+                          }`}
+                        >
+                          {cat.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            }
             return (
               <button
                 key={link.label}
                 onClick={() => navigateTo(link.page, { categoryId: link.categoryId })}
                 className={`transition-colors text-left hover:text-violet-700 ${
-                  isActive ? 'text-violet-700 font-semibold' : 'text-slate-600'
+                  link.active ? 'text-violet-700 font-semibold' : 'text-slate-600'
                 }`}
               >
                 {link.label}

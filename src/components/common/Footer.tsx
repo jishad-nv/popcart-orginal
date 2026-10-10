@@ -75,7 +75,7 @@ export const Footer: React.FC = () => {
           <div className="md:col-span-2 space-y-4">
             <PopcartyLogo size="md" showSubtitle={true} />
             <p className="text-xs text-slate-500 max-w-sm leading-relaxed">
-              Curated flagship audio, smart wearable technology, and high-performance lifestyle accessories designed for modern everyday living.
+              Useful home, kitchen and lifestyle products at honest prices, delivered to your doorstep.
             </p>
 
             {/* Newsletter Subscription */}

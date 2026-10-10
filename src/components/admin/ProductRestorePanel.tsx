@@ -4,6 +4,7 @@ import { DownloadCloud, RefreshCw, Percent, CheckCircle2, AlertCircle } from 'lu
 import { db } from '../../services/firebase';
 import { useStore } from '../../context/StoreContext';
 import { calculateProductPricing } from '../../services/productImporter';
+import { CATEGORY_DEFS, classifyProduct, cleanProductName, getCategoryName } from '../../services/categoryMapper';
 
 const BATCH_SIZE = 400;
 
@@ -67,9 +68,15 @@ export const ProductRestorePanel: React.FC = () => {
         for (const p of items.slice(i, i + BATCH_SIZE)) {
           const id = p.sourceProductId ? `prod-${p.sourceProductId}` : String(p.id);
           const pricing = buildPricing(Number(p.costPrice), Number(p.originalPrice) || 0, margin);
+          const knownCategory = CATEGORY_DEFS.some((c) => c.id === p.categoryId);
+          const categoryId = knownCategory ? p.categoryId : classifyProduct(p.name, p.sourceCategory || p.subcategory || '');
           const productDoc = {
             ...p,
             id,
+            name: cleanProductName(p.name),
+            categoryId,
+            category: getCategoryName(categoryId),
+            subcategory: getCategoryName(categoryId),
             description: toPlainText(p.description, 800),
             shortDescription: toPlainText(p.shortDescription || p.name, 160),
             images: Array.isArray(p.images) ? p.images.slice(0, 1) : [],
@@ -132,6 +139,51 @@ export const ProductRestorePanel: React.FC = () => {
     }
   };
 
+  // C. Re-assign every product to the new category list
+  const handleRecategorize = async () => {
+    if (!window.confirm('Re-assign the category of ALL products using the new category list?')) return;
+
+    setBusy(true);
+    setError('');
+    setProgress(0);
+    setMessage('Loading products...');
+    try {
+      const snap = await getDocs(collection(db, 'products'));
+      const changes = snap.docs
+        .map((d: any) => {
+          const data: any = d.data();
+          const categoryId = classifyProduct(data.name || '', data.sourceCategory || data.specifications?.['Product Type'] || '');
+          return { ref: d.ref, categoryId, changed: data.categoryId !== categoryId };
+        })
+        .filter((c: any) => c.changed);
+
+      if (changes.length === 0) {
+        setMessage('All products already use the new categories.');
+        return;
+      }
+      for (let i = 0; i < changes.length; i += BATCH_SIZE) {
+        const batch = writeBatch(db);
+        for (const c of changes.slice(i, i + BATCH_SIZE)) {
+          batch.update(c.ref, {
+            categoryId: c.categoryId,
+            category: getCategoryName(c.categoryId),
+            subcategory: getCategoryName(c.categoryId),
+          });
+        }
+        await batch.commit();
+        const done = Math.min(i + BATCH_SIZE, changes.length);
+        setProgress(Math.round((done / changes.length) * 100));
+        setMessage(`Updated ${done} of ${changes.length} products...`);
+      }
+      finish(`${changes.length} products moved to the new categories. Reloading...`);
+    } catch (err: any) {
+      setError(err?.code === 'permission-denied' ? 'Permission denied. Sign in as the owner.' : err?.message || 'Update failed.');
+      setMessage('');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="bg-white rounded-3xl border border-slate-200/90 p-5 sm:p-7 shadow-xs space-y-5">
       <div>
@@ -184,6 +236,15 @@ export const ProductRestorePanel: React.FC = () => {
         >
           <RefreshCw className={`w-4 h-4 ${busy ? 'animate-spin' : ''}`} />
           <span>Apply margin to all products</span>
+        </button>
+
+        <button
+          type="button"
+          disabled={busy}
+          onClick={handleRecategorize}
+          className="px-5 py-2.5 rounded-xl border border-slate-300 hover:bg-slate-50 disabled:opacity-50 text-slate-800 text-sm font-bold flex items-center justify-center gap-2 transition-colors"
+        >
+          <span>Re-categorize all products</span>
         </button>
       </div>
 

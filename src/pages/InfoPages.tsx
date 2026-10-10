@@ -76,7 +76,7 @@ export const InfoPages: React.FC = () => {
 
             <h3 className="text-base font-bold text-slate-900 pt-2">Direct-from-Lab Craftsmanship</h3>
             <p>
-              Every audio driver, titanium casing, and braided aramid fiber weave in our catalog is engineered to military-spec drop standards and certified for lossless acoustics. By cutting unnecessary distributor markups, we deliver flagship tier build quality directly to your doorstep.
+              We pick practical everyday products for the home, kitchen and lifestyle. By working directly with trusted suppliers, we bring you useful items at fair prices, delivered to your doorstep.
             </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-4 not-prose">

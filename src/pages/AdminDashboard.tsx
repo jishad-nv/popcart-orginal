@@ -79,7 +79,7 @@ export const AdminDashboard: React.FC = () => {
   const [productForm, setProductForm] = useState({
     name: '',
     brand: '',
-    categoryId: 'audio',
+    categoryId: 'kitchen',
     subcategory: '',
     costPrice: 199,
     price: 349,
@@ -103,7 +103,7 @@ export const AdminDashboard: React.FC = () => {
 
   // Bulk Product Management State
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
-  const [bulkCategoryTarget, setBulkCategoryTarget] = useState<string>(categories[0]?.id || 'audio');
+  const [bulkCategoryTarget, setBulkCategoryTarget] = useState<string>(categories[0]?.id || 'kitchen');
 
   // Search & Filters in Products Management
   const [productSearch, setProductSearch] = useState('');
@@ -152,7 +152,7 @@ export const AdminDashboard: React.FC = () => {
     setProductForm({
       name: '',
       brand: 'Popcarty Verified',
-      categoryId: categories[0]?.id || 'audio',
+      categoryId: categories[0]?.id || 'kitchen',
       subcategory: 'Accessories',
       costPrice: 199,
       price: 299,

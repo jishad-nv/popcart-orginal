@@ -31,13 +31,13 @@ export const SearchModal: React.FC = () => {
   if (!isSearchModalOpen) return null;
 
   const trendingTags = [
-    'Earbuds Pro',
-    'Smartwatch Ultra',
-    'MagSafe Case',
-    'Studio Headphones',
-    'Power Bank',
-    'Braided Cable',
-    'Gaming Headset',
+    'Kitchen Organizer',
+    'Water Bottle',
+    'Storage Box',
+    'LED Lamp',
+    'Cleaning Brush',
+    'Kids Toy',
+    'Tool Kit',
   ];
 
   const filteredProducts = searchTerm.trim()
@@ -117,7 +117,7 @@ export const SearchModal: React.FC = () => {
           {filteredProducts.length === 0 ? (
             <div className="py-12 text-center text-slate-500">
               <p className="text-sm font-medium">No products matching "{searchTerm}"</p>
-              <p className="text-xs text-slate-400 mt-1">Try checking for typos or searching general terms like "audio" or "watch"</p>
+              <p className="text-xs text-slate-400 mt-1">Try checking for typos or searching general terms like "kitchen" or "storage"</p>
             </div>
           ) : (
             <div className="divide-y divide-slate-100">

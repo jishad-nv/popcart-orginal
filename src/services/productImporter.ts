@@ -1,4 +1,5 @@
 import { ImportPreviewProduct, ImportStats, ImportErrorItem, Product, ProductVariant } from '../types';
+import { classifyProduct, getCategoryName } from './categoryMapper';
 import { auth, db } from './firebase';
 import { doc, writeBatch, collection, getDocs, getCountFromServer } from 'firebase/firestore';
 
@@ -193,27 +194,8 @@ function processRawProducts(
     const tags = Array.isArray(p.tags) ? p.tags.join(', ') : (p.tags || '');
     const combined = `${tags} ${cleanTitle} ${p.product_type || ''}`.toLowerCase();
 
-    let categoryId = 'home';
-    let categoryName = 'Smart Home';
-    if (combined.includes('audio') || combined.includes('earbud') || combined.includes('headphone') || combined.includes('speaker')) {
-      categoryId = 'audio';
-      categoryName = 'Audio';
-    } else if (combined.includes('watch') || combined.includes('strap') || combined.includes('fitness')) {
-      categoryId = 'watches';
-      categoryName = 'Watches';
-    } else if (combined.includes('cable') || combined.includes('charger') || combined.includes('power') || combined.includes('magsafe')) {
-      categoryId = 'chargers';
-      categoryName = 'Power & Cables';
-    } else if (combined.includes('game') || combined.includes('mouse') || combined.includes('keyboard')) {
-      categoryId = 'gaming';
-      categoryName = 'Gaming';
-    } else if (combined.includes('phone') || combined.includes('smartphone')) {
-      categoryId = 'phones';
-      categoryName = 'Phones';
-    } else if (combined.includes('case') || combined.includes('cover') || combined.includes('mount') || combined.includes('holder')) {
-      categoryId = 'cases';
-      categoryName = 'Cases & Gear';
-    }
+    const categoryId = classifyProduct(cleanTitle, p.product_type || '');
+    const categoryName = getCategoryName(categoryId);
 
     const description = (p.body_html || p.description || '')
       .replace(/<[^>]*>?/gm, '')
@@ -251,7 +233,12 @@ function processRawProducts(
       shortDescription: description ? description.substring(0, 120) + '...' : 'Premium quality import.',
       images: item.images.length > 0 ? item.images : ['https://images.unsplash.com/photo-1590658268037-6bf12165a8df?w=800&auto=format&fit=crop&q=80'],
       variants,
-      specifications: { supplierSku },
+      specifications: {
+        supplierSku,
+        'Product Type': p.product_type || '',
+        supplierHandle: String(p.handle || ''),
+        supplierVariantId: String(item.cheapestVariant?.id || ''),
+      },
       rating: 4.8,
       reviewCount: 1,
       selected: true,

@@ -40,10 +40,14 @@ export const ShopPage: React.FC = () => {
 
   // Sync category filter if changed from navigation
   useEffect(() => {
-    if (selectedCategoryFilter) {
-      setSelectedCategory(selectedCategoryFilter);
-    }
+    setSelectedCategory(selectedCategoryFilter || 'all');
   }, [selectedCategoryFilter]);
+
+  // Category chosen on this page: also tell the store so the header highlight stays in sync
+  const chooseCategory = (id: string) => {
+    setSelectedCategory(id);
+    navigateTo('shop', { categoryId: id === 'all' ? '' : id, replace: true });
+  };
 
   // Sync active price filter from navigation (e.g. from Shop by Price section)
   useEffect(() => {
@@ -62,7 +66,7 @@ export const ShopPage: React.FC = () => {
 
   // Reset Filters
   const handleResetFilters = () => {
-    setSelectedCategory('all');
+    chooseCategory('all');
     setMinPrice(0);
     setMaxPrice(75000);
     setActivePriceFilter(null);
@@ -94,10 +98,7 @@ export const ShopPage: React.FC = () => {
 
         // Category
         if (selectedCategory !== 'all') {
-          const isHomeMatch =
-            (selectedCategory === 'home' || selectedCategory === 'smart-home') &&
-            (p.categoryId === 'home' || p.categoryId === 'smart-home');
-          if (!isHomeMatch && p.categoryId !== selectedCategory) {
+          if (p.categoryId !== selectedCategory) {
             return false;
           }
         }
@@ -218,7 +219,7 @@ export const ShopPage: React.FC = () => {
       >
         <div className="flex items-center gap-1.5 sm:gap-2 flex-nowrap w-max pr-4 sm:pr-0">
           <button
-            onClick={() => setSelectedCategory('all')}
+            onClick={() => chooseCategory('all')}
             className={`flex-none px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap cursor-pointer select-none ${
               selectedCategory === 'all'
                 ? 'bg-violet-600 text-white shadow-xs font-bold'
@@ -231,7 +232,7 @@ export const ShopPage: React.FC = () => {
           {categories.map((cat) => (
             <button
               key={cat.id}
-              onClick={() => setSelectedCategory(cat.id)}
+              onClick={() => chooseCategory(cat.id)}
               className={`flex-none px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap cursor-pointer select-none ${
                 selectedCategory === cat.id
                   ? 'bg-violet-600 text-white shadow-xs font-bold'
@@ -297,7 +298,7 @@ export const ShopPage: React.FC = () => {
                     type="radio"
                     name="cat"
                     checked={selectedCategory === 'all'}
-                    onChange={() => setSelectedCategory('all')}
+                    onChange={() => chooseCategory('all')}
                     className="accent-violet-600"
                   />
                   <span>All Categories</span>
@@ -311,7 +312,7 @@ export const ShopPage: React.FC = () => {
                       type="radio"
                       name="cat"
                       checked={selectedCategory === c.id}
-                      onChange={() => setSelectedCategory(c.id)}
+                      onChange={() => chooseCategory(c.id)}
                       className="accent-violet-600"
                     />
                     <span>{c.name}</span>
@@ -512,7 +513,7 @@ export const ShopPage: React.FC = () => {
                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-slate-800 text-white text-[11px] font-semibold shadow-xs">
                   <span>{categories.find((c) => c.id === selectedCategory)?.name}</span>
                   <button
-                    onClick={() => setSelectedCategory('all')}
+                    onClick={() => chooseCategory('all')}
                     className="hover:bg-slate-700 rounded-full p-0.5 ml-0.5 cursor-pointer"
                   >
                     <X className="w-3 h-3" />

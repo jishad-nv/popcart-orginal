@@ -20,6 +20,19 @@ import {
   Tag,
   Star,
   Quote,
+  UtensilsCrossed,
+  Archive,
+  Lamp,
+  Wrench,
+  HeartPulse,
+  Smile,
+  Puzzle,
+  Pencil,
+  Shirt,
+  Flower2,
+  Car,
+  Gift,
+  Dumbbell,
 } from 'lucide-react';
 
 export const HomePage: React.FC = () => {
@@ -50,6 +63,34 @@ export const HomePage: React.FC = () => {
         return <Home className="w-5 h-5" />;
       case 'Shield':
         return <Shield className="w-5 h-5" />;
+      case 'UtensilsCrossed':
+        return <UtensilsCrossed className="w-5 h-5" />;
+      case 'Sparkles':
+        return <Sparkles className="w-5 h-5" />;
+      case 'Archive':
+        return <Archive className="w-5 h-5" />;
+      case 'Lamp':
+        return <Lamp className="w-5 h-5" />;
+      case 'Wrench':
+        return <Wrench className="w-5 h-5" />;
+      case 'HeartPulse':
+        return <HeartPulse className="w-5 h-5" />;
+      case 'Smile':
+        return <Smile className="w-5 h-5" />;
+      case 'Puzzle':
+        return <Puzzle className="w-5 h-5" />;
+      case 'Pencil':
+        return <Pencil className="w-5 h-5" />;
+      case 'Shirt':
+        return <Shirt className="w-5 h-5" />;
+      case 'Flower2':
+        return <Flower2 className="w-5 h-5" />;
+      case 'Car':
+        return <Car className="w-5 h-5" />;
+      case 'Gift':
+        return <Gift className="w-5 h-5" />;
+      case 'Dumbbell':
+        return <Dumbbell className="w-5 h-5" />;
       default:
         return <LayoutGrid className="w-5 h-5" />;
     }
@@ -79,7 +120,7 @@ export const HomePage: React.FC = () => {
               Discover What's Trending
             </h1>
             <p className="text-xs sm:text-sm text-slate-500 mt-1 sm:mt-1.5">
-              Explore the latest in high-performance personal audio, smart gear, and elevated essentials.
+              Discover useful home, kitchen and lifestyle products at honest prices.
             </p>
           </div>
 

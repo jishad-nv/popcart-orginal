@@ -177,7 +177,7 @@ const StoreContext = createContext<StoreContextType | undefined>(undefined);
 
 const STORAGE_KEYS = {
   PRODUCTS: 'auracart_products_v3',
-  CATEGORIES: 'auracart_categories_v3',
+  CATEGORIES: 'auracart_categories_v4',
   CART: 'auracart_cart_v3',
   WISHLIST: 'auracart_wishlist_v3',
   USER: 'auracart_user_v3',

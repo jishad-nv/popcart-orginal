@@ -6,7 +6,7 @@
   "rewrites": [
     {
       "source": "/api/((?!fetch-collection).*)",
-      "destination": "/api/index.ts"
+      "destination": "/api/index.js"
     },
     {
       "source": "/((?!api/|assets/|favicon\\.ico|.*\\..*).*)",

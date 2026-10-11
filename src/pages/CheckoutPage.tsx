@@ -247,15 +247,16 @@ export const CheckoutPage: React.FC = () => {
 
       const data = await parseApiResponse(res);
 
-      const { razorpayOrderId, keyId, amount, currency, orderNumber } = data;
+      const { razorpayOrderId, keyId, checkoutConfigId, amount, currency, orderNumber } = data;
 
-      const options = {
+      const options: any = {
         key: keyId,
         amount,
         currency,
         name: settings.storeName,
         description: `Order #${orderNumber}`,
         order_id: razorpayOrderId,
+        ...(checkoutConfigId ? { checkout_config_id: checkoutConfigId } : {}),
         handler: async function (response: any) {
           try {
             const verifyRes = await fetch('/api/verify-payment', {

@@ -954,12 +954,17 @@ apiRouter.post('/create-order', authenticateUser, async (req: AuthenticatedReque
 
     if (hasRealKeys) {
       try {
-        rzpOrder = await razorpay.orders.create({
+        const configId = process.env.RAZORPAY_CONFIG_ID || process.env.RAZORPAY_CHECKOUT_CONFIG_ID;
+        const orderPayload: any = {
           amount: amountInPaise,
           currency: 'INR',
           receipt: orderNumber,
           notes: { userId: req.user?.id || 'guest', customerEmail: payload.customerEmail || req.user?.email || '' },
-        });
+        };
+        if (configId) {
+          orderPayload.checkout_config_id = configId;
+        }
+        rzpOrder = await razorpay.orders.create(orderPayload);
       } catch (rzpErr: any) {
         console.warn('Razorpay API call failed with real keys, using mock order fallback:', rzpErr?.message);
         rzpOrder = { id: `order_mock_${Math.random().toString(36).substring(2, 10)}` };
@@ -1001,10 +1006,13 @@ apiRouter.post('/create-order', authenticateUser, async (req: AuthenticatedReque
     (newOrder as any).razorpayOrderId = rzpOrder.id;
     createOrderInDb(newOrder);
 
+    const activeConfigId = process.env.RAZORPAY_CONFIG_ID || process.env.RAZORPAY_CHECKOUT_CONFIG_ID || '';
+
     res.json({
       success: true,
       razorpayOrderId: rzpOrder.id,
       keyId: process.env.RAZORPAY_KEY_ID || 'rzp_test_mockKeyId',
+      checkoutConfigId: activeConfigId,
       amount: amountInPaise,
       currency: 'INR',
       orderNumber,

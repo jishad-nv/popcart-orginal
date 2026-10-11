@@ -492,7 +492,7 @@ export const ProfilePage: React.FC = () => {
                             </span>
                             <span className="text-[11px] text-slate-500 block">
                               {ord.items.length} {ord.items.length === 1 ? 'item' : 'items'} ·{' '}
-                              {ord.paymentMethod === 'cod' ? 'COD' : ord.paymentMethod.toUpperCase()} (
+                              {ord.paymentMethod.toUpperCase()} (
                               {ord.paymentStatus.replace(/_/g, ' ')})
                             </span>
                           </div>

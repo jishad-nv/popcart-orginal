@@ -726,8 +726,7 @@ export const AdminDashboard: React.FC = () => {
 
       const matchStatus = orderStatusFilter === 'all' || o.orderStatus === orderStatusFilter;
       const matchPayment =
-        orderPaymentFilter === 'all' ||
-        (orderPaymentFilter === 'cod' ? o.paymentMethod === 'cod' : o.paymentMethod !== 'cod');
+        orderPaymentFilter === 'all' || o.paymentMethod === orderPaymentFilter;
 
       let matchDate = true;
       if (orderDateFilter !== 'all' && o.createdAt) {
@@ -1940,7 +1939,7 @@ export const AdminDashboard: React.FC = () => {
                               {formatPrice(o.totalAmount)}
                             </div>
                             <span className="text-[10px] font-bold uppercase text-slate-500 block">
-                              {o.paymentMethod === 'cod' ? 'COD' : o.paymentMethod} ·{' '}
+                              {o.paymentMethod.toUpperCase()} ·{' '}
                               {o.paymentStatus.replace(/_/g, ' ')}
                             </span>
                           </td>
@@ -2462,9 +2461,7 @@ export const AdminDashboard: React.FC = () => {
                   <div className="flex justify-between text-slate-600">
                     <span>Payment Method</span>
                     <strong className="uppercase text-slate-900">
-                      {selectedOrderForModal.paymentMethod === 'cod'
-                        ? 'Cash on Delivery (COD)'
-                        : selectedOrderForModal.paymentMethod}
+                      {selectedOrderForModal.paymentMethod.toUpperCase()}
                     </strong>
                   </div>
                   <div className="flex justify-between text-slate-600">

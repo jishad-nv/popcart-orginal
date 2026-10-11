@@ -188,8 +188,8 @@ export type OrderStatus =
   | 'cancelled'
   | 'returned';
 
-export type PaymentMethodType = 'cod' | 'card' | 'apple_pay' | 'upi';
-export type PaymentStatusType = 'paid' | 'pending' | 'cod_pending' | 'failed' | 'refunded';
+export type PaymentMethodType = 'upi';
+export type PaymentStatusType = 'paid' | 'pending' | 'failed' | 'refunded';
 
 export interface Order {
   id: string;

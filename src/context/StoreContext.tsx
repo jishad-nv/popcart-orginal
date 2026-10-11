@@ -1564,8 +1564,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       country: orderData.shippingAddress.country || 'India',
     };
 
-    const isCod = orderData.paymentMethod === 'cod';
-    const paymentStatus: PaymentStatusType = isCod ? 'cod_pending' : 'paid';
+    const paymentStatus: PaymentStatusType = 'pending';
 
     const newOrder: Order = {
       id: orderNumber,
@@ -1614,9 +1613,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             dateStyle: 'medium',
             timeStyle: 'short',
           }),
-          note: isCod
-            ? 'Order placed via Cash on Delivery (COD)'
-            : `Order placed & paid via ${orderData.paymentMethod.toUpperCase()}`,
+          note: `Order placed & paid via ${orderData.paymentMethod.toUpperCase()}`,
         },
       ],
       createdAt: nowIso,
@@ -1673,9 +1670,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const orderNotif: NotificationItem = {
       id: `notif-${Date.now()}`,
       title: `Order #${newOrder.orderNumber} Confirmed`,
-      message: isCod
-        ? 'Your Cash on Delivery order is confirmed and being prepared.'
-        : 'Your payment was processed. Tracking will update once shipped.',
+      message: 'Your payment was processed. Tracking will update once shipped.',
       timestamp: 'Just now',
       read: false,
       type: 'order',

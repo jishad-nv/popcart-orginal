@@ -16,6 +16,23 @@ import {
   MapPin,
 } from 'lucide-react';
 
+async function parseApiResponse(res: Response) {
+  const text = await res.text();
+  let data: any = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    if (!res.ok) {
+      throw new Error(`Server Error (${res.status}): ${text.slice(0, 120) || res.statusText}`);
+    }
+    throw new Error(`Invalid response format from server (${res.status})`);
+  }
+  if (!res.ok || data.success === false) {
+    throw new Error(data.message || data.error || `Request failed with status ${res.status}`);
+  }
+  return data;
+}
+
 export const CheckoutPage: React.FC = () => {
   const {
     cart,
@@ -228,10 +245,7 @@ export const CheckoutPage: React.FC = () => {
         }),
       });
 
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.message || 'Failed to initialize payment order.');
-      }
+      const data = await parseApiResponse(res);
 
       const { razorpayOrderId, keyId, amount, currency, orderNumber } = data;
 
@@ -258,17 +272,12 @@ export const CheckoutPage: React.FC = () => {
               }),
             });
 
-            const verifyData = await verifyRes.json();
-            if (verifyRes.ok && verifyData.success) {
-              setIsProcessing(false);
-              setCompletedOrder(verifyData.order);
-              triggerConfetti();
-              clearCart();
-              addToast('Payment Verified!', `Order #${orderNumber} placed and paid successfully.`, 'success');
-            } else {
-              setIsProcessing(false);
-              addToast('Verification Failed', verifyData.message || 'Payment signature verification failed.', 'error');
-            }
+            const verifyData = await parseApiResponse(verifyRes);
+            setIsProcessing(false);
+            setCompletedOrder(verifyData.order);
+            triggerConfetti();
+            clearCart();
+            addToast('Payment Verified!', `Order #${orderNumber} placed and paid successfully.`, 'success');
           } catch (verifyErr: any) {
             setIsProcessing(false);
             addToast('Verification Error', verifyErr?.message || 'Could not verify payment.', 'error');

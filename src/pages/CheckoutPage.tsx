@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useStore } from '../context/StoreContext';
-import { Address, Order, PaymentMethodType } from '../types';
+import { Address, Order } from '../types';
+import { createServerOrder, openRazorpayCheckout, verifyServerPayment } from '../services/paymentApi';
 import { AddressFormFields } from '../components/common/AddressFormFields';
 import confetti from 'canvas-confetti';
 import {
@@ -45,7 +46,6 @@ export const CheckoutPage: React.FC = () => {
     currentUser,
     addresses,
     addAddress,
-    createOrder,
     navigateTo,
     setAuthModalOpen,
     addToast,
@@ -105,9 +105,6 @@ export const CheckoutPage: React.FC = () => {
   // Shipping Method (Standard Ground)
   const shippingMethod: 'standard' = 'standard';
 
-  // Payment Method (UPI Only)
-  const paymentMethod: PaymentMethodType = 'upi';
-
   // Submission State
   const [isProcessing, setIsProcessing] = useState(false);
   const [completedOrder, setCompletedOrder] = useState<Order | null>(null);
@@ -139,20 +136,6 @@ export const CheckoutPage: React.FC = () => {
     } catch {
       // safe fallback
     }
-  };
-
-  const loadRazorpayScript = (): Promise<boolean> => {
-    return new Promise((resolve) => {
-      if ((window as any).Razorpay) {
-        resolve(true);
-        return;
-      }
-      const script = document.createElement('script');
-      script.src = 'https://checkout.razorpay.com/v1/checkout.js';
-      script.onload = () => resolve(true);
-      script.onerror = () => resolve(false);
-      document.body.appendChild(script);
-    });
   };
 
   const handlePlaceOrder = async (e: React.FormEvent) => {
@@ -218,136 +201,48 @@ export const CheckoutPage: React.FC = () => {
     }
 
     setIsProcessing(true);
+    let orderNumber = '';
+    let paymentDone = false;
 
     try {
-      const loaded = await loadRazorpayScript();
-      if (!loaded) {
-        setIsProcessing(false);
-        addToast('Gateway Error', 'Failed to load Razorpay SDK. Please check your internet connection.', 'error');
-        return;
-      }
-
-      const token = localStorage.getItem('popcarty_auth_token_v1') || '';
-      const res = await fetch('/api/create-order', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          items: cart,
-          shippingAddress: finalAddress,
-          shippingMethod: 'standard',
-          couponCode: appliedCoupon?.code,
-          customerName: finalAddress.fullName || finalAddress.name || currentUser.name,
-          customerEmail: finalAddress.email || currentUser.email,
-          customerPhone: finalAddress.phone || currentUser.phone,
-        }),
+      // The server calculates the price from the database. We only send product ids and quantities.
+      const created = await createServerOrder({
+        items: cart.map((item) => ({
+          productId: item.productId,
+          quantity: item.quantity,
+          color: item.selectedColor || '',
+          size: item.selectedSize || '',
+          variantTitle: item.selectedVariantTitle || '',
+        })),
+        shippingAddress: finalAddress,
+        couponCode: appliedCoupon?.code,
       });
+      orderNumber = created.orderNumber;
 
-      const data = await parseApiResponse(res);
-
-      const { razorpayOrderId, keyId, checkoutConfigId, amount, currency, orderNumber } = data;
-
-      const options: any = {
-        key: keyId,
-        amount,
-        currency,
-        name: settings.storeName,
-        description: `Order #${orderNumber}`,
-        order_id: razorpayOrderId,
-        ...(checkoutConfigId ? { checkout_config_id: checkoutConfigId } : {}),
-        handler: async function (response: any) {
-          try {
-            const verifyRes = await fetch('/api/verify-payment', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`,
-              },
-              body: JSON.stringify({
-                razorpay_order_id: response.razorpay_order_id,
-                razorpay_payment_id: response.razorpay_payment_id,
-                razorpay_signature: response.razorpay_signature,
-                orderNumber,
-              }),
-            });
-
-            const verifyData = await parseApiResponse(verifyRes);
-            setIsProcessing(false);
-            setCompletedOrder(verifyData.order);
-            triggerConfetti();
-            clearCart();
-            addToast('Payment Verified!', `Order #${orderNumber} placed and paid successfully.`, 'success');
-          } catch (verifyErr: any) {
-            setIsProcessing(false);
-            addToast('Verification Error', verifyErr?.message || 'Could not verify payment.', 'error');
-          }
-        },
-        modal: {
-          ondismiss: function () {
-            setIsProcessing(false);
-            addToast('Payment Cancelled', 'You closed the payment window.', 'info');
-          },
-        },
-        prefill: {
-          name: finalAddress.fullName || finalAddress.name || currentUser.name,
-          email: finalAddress.email || currentUser.email,
-          contact: finalAddress.phone || currentUser.phone,
-        },
-        theme: {
-          color: '#7c3aed',
-        },
-        config: {
-          display: {
-            blocks: {
-              upi: {
-                name: 'Pay via UPI',
-                instruments: [{ method: 'upi' }],
-              },
-            },
-            sequence: ['block.upi'],
-            preferences: {
-              show_default_blocks: false,
-            },
-          },
-        },
-      };
-
-      if (keyId === 'rzp_test_mockKeyId' || String(razorpayOrderId).startsWith('order_mock_') || !(window as any).Razorpay) {
-        setTimeout(async () => {
-          try {
-            const verifyRes = await fetch('/api/verify-payment', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`,
-              },
-              body: JSON.stringify({
-                razorpay_order_id: razorpayOrderId,
-                razorpay_payment_id: `pay_mock_${Math.random().toString(36).substring(2, 10)}`,
-                razorpay_signature: 'mock_signature',
-                orderNumber,
-              }),
-            });
-            const verifyData = await parseApiResponse(verifyRes);
-            setIsProcessing(false);
-            setCompletedOrder(verifyData.order);
-            triggerConfetti();
-            clearCart();
-            addToast('Payment Verified!', `Order #${orderNumber} placed and paid successfully via UPI.`, 'success');
-          } catch (verifyErr: any) {
-            setIsProcessing(false);
-            addToast('Verification Error', verifyErr?.message || 'Could not verify payment.', 'error');
-          }
-        }, 1200);
-      } else {
-        const rzp = new (window as any).Razorpay(options);
-        rzp.open();
+      if (Math.abs(created.totals.totalAmount - calculatedTotal) >= 1) {
+        addToast('Total updated', `The payable total is ${formatPrice(created.totals.totalAmount)}.`, 'info');
       }
+
+      const payment = await openRazorpayCheckout(created);
+      paymentDone = true;
+
+      const { order } = await verifyServerPayment({ orderNumber, ...payment });
+      setCompletedOrder(order);
+      triggerConfetti();
+      clearCart();
+      addToast('Order Placed!', `Your order #${order.orderNumber} is confirmed. Payment received.`, 'success');
     } catch (err: any) {
+      if (paymentDone) {
+        addToast(
+          'We are confirming your payment',
+          `Order ${orderNumber}: we could not confirm the payment automatically. If money was deducted it will be confirmed shortly or refunded. Please contact support with this order number.`,
+          'error'
+        );
+      } else {
+        addToast('Payment not completed', err?.message || 'Please try again.', 'error');
+      }
+    } finally {
       setIsProcessing(false);
-      addToast('Order Error', err?.message || 'Could not place order. Please try again.', 'error');
     }
   };
 
@@ -672,7 +567,7 @@ export const CheckoutPage: React.FC = () => {
                 />
                 <div>
                   <span className="font-bold text-slate-900 block">Standard Ground Delivery</span>
-                  <span className="text-slate-500 text-[11px] block mt-0.5">3-5 Business Days Pan-India Delivery</span>
+                  <span className="text-slate-500 text-[11px] block mt-0.5">Delivered in 5-10 business days after dispatch</span>
                   <span className="font-bold text-emerald-600 text-xs mt-1 block">
                     {cartShipping === 0 ? 'FREE' : formatPrice(cartShipping)}
                   </span>
@@ -778,7 +673,7 @@ export const CheckoutPage: React.FC = () => {
               {isProcessing ? (
                 <>
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  <span>Saving Order...</span>
+                  <span>Opening secure payment...</span>
                 </>
               ) : (
                 <>
@@ -792,7 +687,7 @@ export const CheckoutPage: React.FC = () => {
 
             <div className="flex items-center justify-center gap-2 text-[11px] text-slate-400 text-center">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
-              <span>Free returns within 7 days · Official Quality Guarantee</span>
+              <span>Secure UPI payment powered by Razorpay</span>
             </div>
           </div>
         </div>

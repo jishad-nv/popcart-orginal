@@ -1,40 +1,23 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // ===============================================================
-    // Helper Functions
-    // ===============================================================
     function isSignedIn() {
       return request.auth != null;
     }
 
-    // Strictly authenticate the store admin ('popcarty7@gmail.com')
+    // The store owner
     function isAdmin() {
       return isSignedIn() && request.auth.token.email == 'popcarty7@gmail.com';
     }
 
-    // Check if the authenticated user owns the existing order document
-    function isOrderOwner() {
-      return isSignedIn() && resource.data.userId == request.auth.uid;
+    // Dedicated server user. api/create-order, api/verify-payment and api/razorpay-webhook sign in as this user.
+    // Create it in Firebase Authentication BEFORE publishing these rules, with a long random password.
+    function isShopServer() {
+      return isSignedIn() && request.auth.token.email == 'shop-server@popcarty.in';
     }
 
-    // Validate Order payload when a customer creates their own order
-    function isValidNewOrder(orderId) {
-      let data = request.resource.data;
-      return data.userId is string &&
-             data.userId == request.auth.uid &&
-             data.orderNumber is string &&
-             data.orderNumber == orderId &&
-             data.customerName is string &&
-             data.customerName.size() > 0 &&
-             data.customerName.size() <= 200 &&
-             data.totalAmount is number &&
-             data.totalAmount >= 0 &&
-             data.items is list &&
-             data.items.size() > 0 &&
-             data.shippingAddress is map &&
-             data.orderStatus == 'placed' &&
-             data.createdAt is string;
+    function isOrderOwner() {
+      return isSignedIn() && resource.data.userId == request.auth.uid;
     }
 
     // Default deny all
@@ -42,31 +25,27 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
-    // ===============================================================
-    // Global Settings ('settings' collection)
-    // ===============================================================
+    // Store settings: owner only (the server may read them to price orders)
     match /settings/{settingId} {
-      // Strictly restricted to the admin ('popcarty7@gmail.com') for both read and write
-      allow read, write: if isAdmin();
+      allow read: if isAdmin() || isShopServer();
+      allow write: if isAdmin();
     }
 
-    // ===============================================================
-    // Orders ('orders' collection)
-    // ===============================================================
+    // Orders are created ONLY by the server after Razorpay confirms the payment.
+    // Customers can read their own orders. The owner can read and manage all of them.
     match /orders/{orderId} {
-      // Private to the order owner (resource.data.userId == request.auth.uid) or the admin
-      allow read: if isAdmin() || isOrderOwner();
-
-      // Customers can only create orders tied to their own UID; admin can create any order
-      allow create: if isAdmin() || (isSignedIn() && isValidNewOrder(orderId));
-
-      // Only the admin can update order status, tracking, payment status, or delete orders
+      allow read: if isAdmin() || isShopServer() || isOrderOwner();
+      allow create: if isAdmin() || isShopServer();
       allow update, delete: if isAdmin();
     }
 
-    // ===============================================================
-    // Catalog & Reviews ('products', 'categories', 'coupons', 'reviews')
-    // ===============================================================
+    // Unpaid orders waiting for payment. Server only (owner can read and clean up).
+    match /pendingOrders/{orderId} {
+      allow read: if isAdmin() || isShopServer();
+      allow create, update: if isShopServer();
+      allow delete: if isAdmin();
+    }
+
     match /products/{productId} {
       allow read: if true;
       allow write: if isAdmin();

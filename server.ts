@@ -11,7 +11,20 @@ const __dirname = path.dirname(__filename);
 
 async function startServer() {
   const app = express();
-  const PORT = process.env.PORT || 3000;
+  let portNum = Number(process.env.PORT) || 3000;
+  let hostStr = '0.0.0.0';
+
+  const args = process.argv.slice(2);
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--port' && args[i + 1]) {
+      portNum = parseInt(args[i + 1], 10);
+      i++;
+    } else if (args[i] === '--host' && args[i + 1]) {
+      hostStr = args[i + 1];
+      i++;
+    }
+  }
+
   const isProduction = process.env.NODE_ENV === 'production';
 
   // 1. Security Headers Middleware (Phase 11 Hardening)
@@ -61,8 +74,8 @@ async function startServer() {
     });
   });
 
-  app.listen(PORT, () => {
-    console.log(`🚀 Popcarty Hardened Backend Server running on http://localhost:${PORT}`);
+  app.listen(portNum, hostStr, () => {
+    console.log(`🚀 Popcarty Hardened Backend Server running on http://${hostStr}:${portNum}`);
   });
 }
 

@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useStore } from '../context/StoreContext';
 import { Address, Order } from '../types';
-import { createServerOrder, openRazorpayCheckout, verifyServerPayment } from '../services/paymentApi';
+import { createServerOrder, openRazorpayCheckout, verifyServerPayment, CreatedOrder, PaymentApiError } from '../services/paymentApi';
 import { AddressFormFields } from '../components/common/AddressFormFields';
 import confetti from 'canvas-confetti';
 import {
@@ -107,7 +107,10 @@ export const CheckoutPage: React.FC = () => {
 
   // Submission State
   const [isProcessing, setIsProcessing] = useState(false);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const [completedOrder, setCompletedOrder] = useState<Order | null>(null);
+  const isSubmittingRef = useRef(false);
+  const pendingOrderCacheRef = useRef<{ fingerprint: string; created: CreatedOrder; createdAt: number } | null>(null);
 
   // Redirect if cart is empty and no completed order
   if (cart.length === 0 && !completedOrder) {
@@ -140,6 +143,11 @@ export const CheckoutPage: React.FC = () => {
 
   const handlePlaceOrder = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Prevent duplicate submissions from rapid double-clicks
+    if (isSubmittingRef.current || isProcessing) {
+      return;
+    }
 
     if (!currentUser) {
       addToast('Sign In Required', 'Please sign in or create an account to complete your order.', 'info');
@@ -200,23 +208,52 @@ export const CheckoutPage: React.FC = () => {
       }
     }
 
+    isSubmittingRef.current = true;
     setIsProcessing(true);
+    setCheckoutError(null);
     let orderNumber = '';
     let paymentDone = false;
 
     try {
-      // The server calculates the price from the database. We only send product ids and quantities.
-      const created = await createServerOrder({
-        items: cart.map((item) => ({
-          productId: item.productId,
-          quantity: item.quantity,
-          color: item.selectedColor || '',
-          size: item.selectedSize || '',
-          variantTitle: item.selectedVariantTitle || '',
-        })),
-        shippingAddress: finalAddress,
-        couponCode: appliedCoupon?.code,
+      const orderItemsPayload = cart.map((item) => ({
+        productId: item.productId,
+        quantity: item.quantity,
+        color: item.selectedColor || '',
+        size: item.selectedSize || '',
+        variantTitle: item.selectedVariantTitle || '',
+      }));
+
+      const fingerprint = JSON.stringify({
+        uid: currentUser.id,
+        items: orderItemsPayload,
+        addr: {
+          name: finalAddress.name || finalAddress.fullName,
+          phone: finalAddress.phone,
+          zipCode: finalAddress.zipCode || finalAddress.pincode,
+          houseNo: finalAddress.houseNo,
+          street: finalAddress.street,
+          city: finalAddress.city,
+          state: finalAddress.state,
+        },
+        coupon: appliedCoupon?.code || '',
       });
+
+      const cached = pendingOrderCacheRef.current;
+      const TEN_MIN_MS = 10 * 60 * 1000;
+      let created: CreatedOrder;
+
+      if (cached && cached.fingerprint === fingerprint && Date.now() - cached.createdAt < TEN_MIN_MS) {
+        created = cached.created;
+      } else {
+        // The server calculates the price from the database. We only send product ids and quantities.
+        created = await createServerOrder({
+          items: orderItemsPayload,
+          shippingAddress: finalAddress,
+          couponCode: appliedCoupon?.code,
+        });
+        pendingOrderCacheRef.current = { fingerprint, created, createdAt: Date.now() };
+      }
+
       orderNumber = created.orderNumber;
 
       if (Math.abs(created.totals.totalAmount - calculatedTotal) >= 1) {
@@ -227,21 +264,27 @@ export const CheckoutPage: React.FC = () => {
       paymentDone = true;
 
       const { order } = await verifyServerPayment({ orderNumber, ...payment });
+      pendingOrderCacheRef.current = null;
       setCompletedOrder(order);
       triggerConfetti();
       clearCart();
       addToast('Order Placed!', `Your order #${order.orderNumber} is confirmed. Payment received.`, 'success');
     } catch (err: any) {
       if (paymentDone) {
-        addToast(
-          'We are confirming your payment',
-          `Order ${orderNumber}: we could not confirm the payment automatically. If money was deducted it will be confirmed shortly or refunded. Please contact support with this order number.`,
-          'error'
-        );
+        pendingOrderCacheRef.current = null;
+        const msg = `Order ${orderNumber}: we could not confirm the payment automatically. If money was deducted it will be confirmed shortly or refunded. Please contact support with this order number.`;
+        setCheckoutError(msg);
+        addToast('We are confirming your payment', msg, 'error');
       } else {
-        addToast('Payment not completed', err?.message || 'Please try again.', 'error');
+        const isTransient = err instanceof PaymentApiError && (err.status === 429 || err.status === 503);
+        const msg = err?.message || 'Please try again.';
+        if (isTransient || !msg.toLowerCase().includes('cancelled')) {
+          setCheckoutError(msg);
+        }
+        addToast(isTransient ? 'Service Temporarily Busy' : 'Payment not completed', msg, 'error');
       }
     } finally {
+      isSubmittingRef.current = false;
       setIsProcessing(false);
     }
   };
@@ -663,6 +706,16 @@ export const CheckoutPage: React.FC = () => {
                 <span className="text-xl text-violet-700 tabular-nums">{formatPrice(calculatedTotal)}</span>
               </div>
             </div>
+
+            {checkoutError && (
+              <div
+                role="alert"
+                className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 space-y-1"
+              >
+                <p className="font-bold">Unable to complete checkout right now</p>
+                <p className="text-[11px] text-amber-800 leading-relaxed">{checkoutError}</p>
+              </div>
+            )}
 
             {/* Submit Button */}
             <button

@@ -13,58 +13,42 @@ const DATABASE_ID =
 // Public Firebase web key (not a secret).
 const WEB_API_KEY = process.env.FIREBASE_API_KEY || 'AIzaSyBCEQY_CufBR1gR7I2KrgLs1-LN48ch_kc';
 
-const DOCS = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/${DATABASE_ID}/documents`;
-
-interface VerifiedUser {
-  uid: string;
-  email: string;
-  name: string;
-}
-
-/** Checks a customer's Firebase ID token with Google and returns who they are (or null). */
-async function verifyIdToken(idToken: string): Promise<VerifiedUser | null> {
-  try {
-    const res = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${WEB_API_KEY}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ idToken }),
-    });
-    const data: any = await res.json().catch(() => ({}));
-    const user = data?.users?.[0];
-    if (!res.ok || !user || user.disabled) return null;
-    return {
-      uid: String(user.localId),
-      email: String(user.email || '').toLowerCase(),
-      name: String(user.displayName || ''),
-    };
-  } catch {
-    return null;
-  }
-}
+const BASE_DB_URL = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/${DATABASE_ID}`;
+const DOCS = `${BASE_DB_URL}/documents`;
 
 let botCache: { token: string; expiresAt: number } | null = null;
+let botSignInPromise: Promise<string> | null = null;
 
 /** ID token of the shop-server user, cached until shortly before it expires. */
 async function getBotToken(): Promise<string> {
   if (botCache && botCache.expiresAt > Date.now() + 60_000) return botCache.token;
+  if (botSignInPromise) return botSignInPromise;
 
-  const email = process.env.SHOP_BOT_EMAIL;
-  const password = process.env.SHOP_BOT_PASSWORD;
-  if (!email || !password) {
-    throw new Error('Server account is not configured (SHOP_BOT_EMAIL / SHOP_BOT_PASSWORD).');
-  }
+  botSignInPromise = (async () => {
+    try {
+      const email = process.env.SHOP_BOT_EMAIL;
+      const password = process.env.SHOP_BOT_PASSWORD;
+      if (!email || !password) {
+        throw new Error('Server account is not configured (SHOP_BOT_EMAIL / SHOP_BOT_PASSWORD).');
+      }
 
-  const res = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${WEB_API_KEY}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password, returnSecureToken: true }),
-  });
-  const data: any = await res.json().catch(() => ({}));
-  if (!res.ok || !data.idToken) {
-    throw new Error(`Server sign-in failed: ${data?.error?.message || res.status}`);
-  }
-  botCache = { token: data.idToken, expiresAt: Date.now() + (Number(data.expiresIn) || 3600) * 1000 };
-  return botCache.token;
+      const res = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${WEB_API_KEY}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, returnSecureToken: true }),
+      });
+      const data: any = await res.json().catch(() => ({}));
+      if (!res.ok || !data.idToken) {
+        throw new Error(`Server sign-in failed: ${data?.error?.message || res.status}`);
+      }
+      botCache = { token: data.idToken, expiresAt: Date.now() + (Number(data.expiresIn) || 3600) * 1000 };
+      return botCache.token;
+    } finally {
+      botSignInPromise = null;
+    }
+  })();
+
+  return botSignInPromise;
 }
 
 // ---------- value conversion ----------
@@ -139,23 +123,37 @@ async function fsGet(path: string, token?: string): Promise<Record<string, any> 
   return docToObj(await res.json());
 }
 
-/** Lists up to `max` documents of a collection (ids included as `__id`). */
-async function fsList(collection: string, token?: string, max = 500): Promise<Record<string, any>[]> {
-  const out: Record<string, any>[] = [];
-  let pageToken = '';
-  while (out.length < max) {
-    const url = `${DOCS}/${collection}?pageSize=100${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`;
-    const res = await fetch(url, { headers: headers(token) });
-    if (res.status === 404) break;
-    if (!res.ok) await fail(res, `List ${collection}`);
-    const data: any = await res.json();
-    for (const d of data.documents || []) {
-      out.push({ __id: String(d.name).split('/').pop(), ...docToObj(d) });
-    }
-    if (!data.nextPageToken) break;
-    pageToken = data.nextPageToken;
+/** Batch reads multiple documents in a single round-trip. */
+async function fsBatchGet(paths: string[], token?: string): Promise<Map<string, Record<string, any> | null>> {
+  const uniquePaths = Array.from(new Set(paths.filter(Boolean)));
+  const result = new Map<string, Record<string, any> | null>();
+  if (uniquePaths.length === 0) return result;
+  if (uniquePaths.length === 1) {
+    result.set(uniquePaths[0], await fsGet(uniquePaths[0], token));
+    return result;
   }
-  return out;
+
+  const fullDocPrefix = `projects/${PROJECT_ID}/databases/${DATABASE_ID}/documents/`;
+  const fullNames = uniquePaths.map((p) => `${fullDocPrefix}${p}`);
+  const res = await fetch(`${BASE_DB_URL}/documents:batchGet`, {
+    method: 'POST',
+    headers: headers(token),
+    body: JSON.stringify({ documents: fullNames }),
+  });
+  if (!res.ok) await fail(res, `Read ${uniquePaths[0]}`);
+  const entries: any[] = await res.json();
+  for (const p of uniquePaths) result.set(p, null);
+  if (Array.isArray(entries)) {
+    for (const entry of entries) {
+      if (entry?.found?.name) {
+        const relPath = String(entry.found.name).startsWith(fullDocPrefix)
+          ? String(entry.found.name).slice(fullDocPrefix.length)
+          : String(entry.found.name).split('/documents/').pop() || '';
+        if (relPath) result.set(relPath, docToObj(entry.found));
+      }
+    }
+  }
+  return result;
 }
 
 /** Creates a document; throws FirestoreError(409) when the id already exists. */
@@ -191,12 +189,15 @@ const stamp = () =>
 async function finalizePaidOrder(
   orderNumber: string,
   razorpayPaymentId: string,
-  token: string
+  token: string,
+  alreadyLoadedPending?: Record<string, any> | null
 ): Promise<Record<string, any>> {
-  const existing = await fsGet(`orders/${orderNumber}`, token);
-  if (existing) return existing;
-
-  const pending = await fsGet(`pendingOrders/${orderNumber}`, token);
+  let pending = alreadyLoadedPending;
+  if (!pending) {
+    const existing = await fsGet(`orders/${orderNumber}`, token);
+    if (existing) return existing;
+    pending = await fsGet(`pendingOrders/${orderNumber}`, token);
+  }
   if (!pending) throw new Error('Pending order not found');
 
   const now = new Date().toISOString();
@@ -228,7 +229,6 @@ async function finalizePaidOrder(
   return order;
 }
 // ---------------- end of shared helpers ----------------
-
 
 async function readRawBody(req: any): Promise<string> {
   const chunks: Buffer[] = [];
@@ -274,9 +274,10 @@ export default async function handler(req: any, res: any) {
 
   try {
     const botToken = await getBotToken();
-    if (await fsGet(`orders/${orderNumber}`, botToken)) return res.status(200).json({ ok: true, already: true });
+    const orderDocs = await fsBatchGet([`orders/${orderNumber}`, `pendingOrders/${orderNumber}`], botToken);
+    if (orderDocs.get(`orders/${orderNumber}`)) return res.status(200).json({ ok: true, already: true });
 
-    const pending = await fsGet(`pendingOrders/${orderNumber}`, botToken);
+    const pending = orderDocs.get(`pendingOrders/${orderNumber}`);
     if (!pending) return res.status(200).json({ ok: true, ignored: 'unknown order' });
 
     if (payment.order_id !== pending.razorpayOrderId || payment.amount !== pending.amountPaise || payment.currency !== 'INR') {
@@ -284,7 +285,7 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({ ok: true, ignored: 'mismatch' });
     }
 
-    await finalizePaidOrder(orderNumber, payment.id, botToken);
+    await finalizePaidOrder(orderNumber, payment.id, botToken, pending);
     return res.status(200).json({ ok: true });
   } catch (err: any) {
     console.error('razorpay-webhook error:', err?.message || err);

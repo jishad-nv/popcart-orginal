@@ -25,16 +25,45 @@ export interface RazorpayResult {
   razorpay_signature: string;
 }
 
+export class PaymentApiError extends Error {
+  status: number;
+  code: string;
+  retryable: boolean;
+
+  constructor(message: string, status: number, code = '', retryable = false) {
+    super(message);
+    this.name = 'PaymentApiError';
+    this.status = status;
+    this.code = code;
+    this.retryable = retryable;
+  }
+}
+
 const post = async (path: string, body: unknown) => {
   const user = auth.currentUser;
-  if (!user) throw new Error('Please sign in to place your order.');
+  if (!user) throw new PaymentApiError('Please sign in to place your order.', 401, 'UNAUTHORIZED', false);
+
+  const token = await user.getIdToken();
   const res = await fetch(path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await user.getIdToken()}` },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.message || data.error || `Request failed (${res.status})`);
+  if (!res.ok) {
+    const fallbackMsg =
+      res.status === 429
+        ? 'Our checkout service is experiencing high traffic right now. Your cart and address are saved — please wait a moment and try again.'
+        : res.status === 503
+          ? 'The checkout service is temporarily busy. Your cart and address are saved — please try again shortly.'
+          : `Request failed (${res.status})`;
+    throw new PaymentApiError(
+      data.message || data.error || fallbackMsg,
+      res.status,
+      String(data.code || ''),
+      Boolean(data.retryable ?? (res.status === 429 || res.status === 503))
+    );
+  }
   return data;
 };
 

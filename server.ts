@@ -2,6 +2,9 @@ import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { apiRouter } from './server/routes';
+import createOrderHandler from './api/create-order';
+import verifyPaymentHandler from './api/verify-payment';
+import razorpayWebhookHandler from './api/razorpay-webhook';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,7 +31,10 @@ async function startServer() {
   app.use(express.json({ limit: '2mb' }));
   app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
-  // 3. Mount Backend API Router
+  // 3. Mount Vercel Serverless Payment Handlers & Backend API Router
+  app.all('/api/create-order', (req, res) => createOrderHandler(req, res));
+  app.all('/api/verify-payment', (req, res) => verifyPaymentHandler(req, res));
+  app.all('/api/razorpay-webhook', (req, res) => razorpayWebhookHandler(req, res));
   app.use('/api', apiRouter);
 
   // 4. Vite Dev Middlewares in development, or Static in production

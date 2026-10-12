@@ -509,6 +509,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const loadFirestoreProducts = async () => {
       const productsCol = collection(db, 'products');
+      const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+      const lastSync = Number(localStorage.getItem(STORAGE_KEYS.PRODUCTS_SYNC_AT) || 0);
 
       // 1. First try reading from persistent IndexedDB Firestore cache (0 daily read quota consumed)
       try {
@@ -520,16 +522,19 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           });
           if (cachedProds.length > 0) {
             setProducts(cachedProds);
-            const lastSync = Number(localStorage.getItem(STORAGE_KEYS.PRODUCTS_SYNC_AT) || 0);
-            const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
-            // Skip full-collection server read if synced within the last 6 hours
             if (Date.now() - lastSync < SIX_HOURS_MS) {
               return;
             }
           }
         }
       } catch {
-        // Cache miss or unavailable; fall through to network fetch
+        // Cache miss or unavailable; check localStorage sync timestamp next
+      }
+
+      // If localStorage already holds synced products from within the last 6 hours, avoid re-reading the entire collection on every page refresh
+      const localCached = loadStorage<Product[]>(STORAGE_KEYS.PRODUCTS, []);
+      if (Array.isArray(localCached) && localCached.length > 0 && Date.now() - lastSync < SIX_HOURS_MS) {
+        return;
       }
 
       // 2. Fetch from Firestore server if cache was empty or stale

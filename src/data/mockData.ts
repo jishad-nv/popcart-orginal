@@ -5,8 +5,8 @@ export const INITIAL_SETTINGS: StoreSettings = {
   tagline: 'TRENDING PRODUCTS · BETTER LIVING',
   currency: 'INR',
   currencyRate: 83.5,
-  freeShippingThreshold: 1999,
-  standardShippingFee: 99,
+  freeShippingThreshold: 0,
+  standardShippingFee: 49,
   taxRate: 0.12,
   announcementBar: {
     enabled: true,

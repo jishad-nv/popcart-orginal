@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useStore } from '../context/StoreContext';
-import { ShoppingBag, Trash2, Plus, Minus, ArrowRight, ArrowLeft, Tag, Check, Truck, ShieldCheck } from 'lucide-react';
+import { ShoppingBag, Trash2, Plus, Minus, ArrowRight, ArrowLeft, Tag, Check, Truck, ShieldCheck, AlertTriangle } from 'lucide-react';
+import { formatWeightDisplay } from '../config/shipping';
 
 export const CartPage: React.FC = () => {
   const {
@@ -10,9 +11,12 @@ export const CartPage: React.FC = () => {
     clearCart,
     cartSubtotal,
     cartDiscount,
+    cartBaseShipping,
+    cartShippingDiscount,
     cartShipping,
-    cartTax,
     cartTotal,
+    cartTotalWeight,
+    isCartOverWeightLimit,
     appliedCoupon,
     applyCoupon,
     removeCoupon,
@@ -36,7 +40,8 @@ export const CartPage: React.FC = () => {
     }
   };
 
-  const amountNeeded = Math.max(0, settings.freeShippingThreshold - cartSubtotal);
+  const subtotalAfterDiscounts = Math.max(0, cartSubtotal - cartDiscount);
+  const amountNeededForDiscount50 = Math.max(0, 501 - subtotalAfterDiscounts);
 
   if (cart.length === 0) {
     return (
@@ -78,19 +83,41 @@ export const CartPage: React.FC = () => {
         </button>
       </div>
 
-      {/* Free shipping banner */}
-      <div className="p-4 rounded-2xl bg-violet-50/70 border border-violet-100 flex items-center gap-3">
-        <Truck className="w-5 h-5 text-violet-600 shrink-0" />
-        <p className="text-xs text-slate-700">
-          {amountNeeded === 0 ? (
-            <span className="font-bold text-emerald-700">Congratulations! You unlocked Free Express Shipping.</span>
+      {/* Shipping Offers & Order Weight Status Banner */}
+      <div className={`p-4 rounded-2xl border flex items-center gap-3 transition-colors ${
+        isCartOverWeightLimit
+          ? 'bg-rose-50 border-rose-200 text-rose-800'
+          : subtotalAfterDiscounts > 500
+          ? 'bg-emerald-50/80 border-emerald-100 text-emerald-800'
+          : 'bg-violet-50/70 border-violet-100 text-slate-700'
+      }`}>
+        {isCartOverWeightLimit ? (
+          <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0" />
+        ) : (
+          <Truck className="w-5 h-5 text-violet-600 shrink-0" />
+        )}
+        <div className="text-xs">
+          {isCartOverWeightLimit ? (
+            <div>
+              <strong className="block text-rose-900 font-bold text-sm">Order Weight Limit Exceeded (Maximum 10 kg)</strong>
+              <span>
+                Your current order weighs <strong>{formatWeightDisplay(cartTotalWeight)}</strong>, which exceeds our maximum order limit of 10 kg. Please reduce item quantities to proceed to checkout.
+              </span>
+            </div>
+          ) : subtotalAfterDiscounts > 500 ? (
+            <div>
+              <span className="font-bold text-emerald-900">
+                🎉 ₹50 Shipping Discount Applied!
+              </span>{' '}
+              Orders with a product subtotal over ₹500 automatically receive ₹50 off calculated weight-based shipping.
+            </div>
           ) : (
-            <span>
-              Add <strong className="text-slate-900">{formatPrice(amountNeeded)}</strong> more to your bag to enjoy{' '}
-              <strong className="text-violet-700">Free Express Delivery</strong>.
-            </span>
+            <div>
+              Add <strong className="text-slate-900 font-bold">{formatPrice(amountNeededForDiscount50)}</strong> more to unlock{' '}
+              <strong className="text-violet-700 font-bold">₹50 OFF Shipping</strong> on orders over ₹500!
+            </div>
           )}
-        </p>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
@@ -250,14 +277,26 @@ export const CartPage: React.FC = () => {
                 </div>
               )}
               <div className="flex justify-between">
-                <span>Shipping Fee</span>
-                <span className="font-semibold text-slate-900 tabular-nums">
-                  {cartShipping === 0 ? <span className="text-emerald-600">FREE</span> : formatPrice(cartShipping)}
+                <span>Total Cart Weight</span>
+                <span className={`font-semibold tabular-nums ${isCartOverWeightLimit ? 'text-rose-600 font-bold' : 'text-slate-900'}`}>
+                  {formatWeightDisplay(cartTotalWeight)}
                 </span>
               </div>
               <div className="flex justify-between">
-                <span>Estimated Tax (12% GST)</span>
-                <span className="font-semibold text-slate-900 tabular-nums">{formatPrice(cartTax)}</span>
+                <span>Weight-Based Shipping</span>
+                <span className="font-semibold text-slate-900 tabular-nums">{formatPrice(cartBaseShipping)}</span>
+              </div>
+              {cartShippingDiscount > 0 && (
+                <div className="flex justify-between text-emerald-600 font-medium">
+                  <span>Shipping Discount (Orders &gt; ₹500)</span>
+                  <span className="font-semibold tabular-nums">-{formatPrice(cartShippingDiscount)}</span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span>Final Shipping Charge</span>
+                <span className="font-semibold text-slate-900 tabular-nums">
+                  {cartShipping === 0 ? <span className="text-emerald-600 font-bold">FREE</span> : formatPrice(cartShipping)}
+                </span>
               </div>
               <div className="border-t border-slate-200 pt-3 flex justify-between text-base font-extrabold text-slate-900">
                 <span>Estimated Total</span>
@@ -265,12 +304,27 @@ export const CartPage: React.FC = () => {
               </div>
             </div>
 
+            {isCartOverWeightLimit && (
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 text-xs flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                <span>Order weight exceeds maximum 10 kg limit. Reduce quantities to proceed.</span>
+              </div>
+            )}
+
             <button
-              onClick={() => navigateTo('checkout')}
-              className="w-full py-3.5 px-4 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700 text-white text-xs sm:text-sm font-bold rounded-xl shadow-lg shadow-violet-500/25 flex items-center justify-center gap-2 transition-all cursor-pointer"
+              disabled={isCartOverWeightLimit}
+              onClick={() => {
+                if (isCartOverWeightLimit) return;
+                navigateTo('checkout');
+              }}
+              className={`w-full py-3.5 px-4 ${
+                isCartOverWeightLimit
+                  ? 'bg-slate-300 text-slate-500 cursor-not-allowed shadow-none'
+                  : 'bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700 text-white shadow-lg shadow-violet-500/25 cursor-pointer'
+              } text-xs sm:text-sm font-bold rounded-xl flex items-center justify-center gap-2 transition-all`}
             >
-              <span>Proceed to Checkout</span>
-              <ArrowRight className="w-4 h-4" />
+              <span>{isCartOverWeightLimit ? 'Weight Limit Exceeded (Max 10 kg)' : 'Proceed to Checkout'}</span>
+              {!isCartOverWeightLimit && <ArrowRight className="w-4 h-4" />}
             </button>
 
             <div className="pt-2 text-center flex items-center justify-center gap-1.5 text-[11px] text-slate-400">

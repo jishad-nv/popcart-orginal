@@ -372,7 +372,7 @@ async function fsCreate(collection: string, id: string, obj: Record<string, any>
 }
 
 // ---------------- Warm-Instance Caches & Idempotency State ----------------
-const DEFAULT_SETTINGS = { freeShippingThreshold: 1999, standardShippingFee: 99, taxRate: 0.12 };
+const DEFAULT_SETTINGS = { taxRate: 0.12 };
 const SETTINGS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes for non-stock store settings
 let settingsCache: { data: typeof DEFAULT_SETTINGS; expiresAt: number } | null = null;
 
@@ -685,16 +685,12 @@ export default async function handler(req: any, res: any) {
     if (needSettingsFetch) {
       const stored = docsMap.get('settings/store') || {};
       settings = {
-        freeShippingThreshold: num(stored.freeShippingThreshold, DEFAULT_SETTINGS.freeShippingThreshold),
-        standardShippingFee: num(stored.standardShippingFee, DEFAULT_SETTINGS.standardShippingFee),
         taxRate: Math.min(1, num(stored.taxRate, DEFAULT_SETTINGS.taxRate)),
       };
       settingsCache = { data: settings, expiresAt: Date.now() + SETTINGS_CACHE_TTL_MS };
     } else if (settingsCache) {
       settings = settingsCache.data;
     }
-
-    const shippingCost = subtotal >= settings.freeShippingThreshold ? 0 : settings.standardShippingFee;
 
     let discountAmount = 0;
     let couponCode = '';
@@ -729,8 +725,65 @@ export default async function handler(req: any, res: any) {
       couponCode = String(coupon.code).toUpperCase();
     }
 
-    const tax = Math.round(Math.max(0, subtotal - discountAmount) * settings.taxRate);
-    const totalAmount = Math.max(0, Math.round((subtotal - discountAmount + shippingCost + tax) * 100) / 100);
+    // Shipping Calculation & Validation:
+    // 1. Calculate product subtotal after applicable product discounts
+    const subtotalAfterDiscounts = Math.max(0, subtotal - discountAmount);
+
+    // 2. Combined weight of all products multiplied by their quantities
+    let totalWeightInGrams = 0;
+    for (const line of lines.values()) {
+      const p = validatedProducts.get(line.productId)!;
+      const productWeight = Number.isFinite(Number(p.weight)) && Number(p.weight) > 0 ? Number(p.weight) : 500;
+      totalWeightInGrams += productWeight * line.quantity;
+    }
+
+    // 3. Maximum Order Weight Limit: 10 KG (10,000 grams)
+    if (totalWeightInGrams > 10000) {
+      const kgWeight = (totalWeightInGrams / 1000).toFixed(2);
+      throw new ClientOrderError(
+        400,
+        `Your order weight (${kgWeight} kg) exceeds our maximum order limit of 10 kg. Please reduce item quantities.`
+      );
+    }
+
+    // 4. New Weight-Based Shipping Charges:
+    // - 0 KG to 1 KG (0 - 1000g): ₹49
+    // - Above 1 KG to 2 KG (1001 - 2000g): ₹99
+    // - Above 2 KG to 3 KG (2001 - 3000g): ₹119 (IMPORTANT: ₹119, NOT ₹109)
+    // - Above 3 KG to 4 KG (3001 - 4000g): ₹129
+    // - Above 4 KG to 5 KG (4001 - 5000g): ₹149
+    // - Above 5 KG to 10 KG (5001 - 10000g): ₹249
+    let baseShipping = 0;
+    if (totalWeightInGrams > 0) {
+      if (totalWeightInGrams <= 1000) {
+        baseShipping = 49;
+      } else if (totalWeightInGrams <= 2000) {
+        baseShipping = 99;
+      } else if (totalWeightInGrams <= 3000) {
+        baseShipping = 119; // IMPORTANT: ₹119, NOT ₹109
+      } else if (totalWeightInGrams <= 4000) {
+        baseShipping = 129;
+      } else if (totalWeightInGrams <= 5000) {
+        baseShipping = 149;
+      } else {
+        baseShipping = 249; // 5 KG to 10 KG
+      }
+    }
+
+    // 5. Automatic Shipping Offers:
+    // - Free delivery is completely eliminated. Free delivery must not be offered automatically under any circumstances.
+    // - ₹50 Shipping Discount: If subtotal > ₹500, apply ₹50 discount on shipping (never negative).
+    // - Orders of ₹500 or less: No shipping discount.
+    let shippingDiscount = 0;
+    if (baseShipping > 0 && subtotalAfterDiscounts > 500) {
+      shippingDiscount = Math.min(50, baseShipping);
+    }
+    const shippingCost = Math.max(0, baseShipping - shippingDiscount);
+
+    // Optional separate GST charge removed.
+    // Final Total = Product Subtotal (after discounts) + Final Shipping Charge
+    const tax = 0;
+    const totalAmount = Math.max(0, Math.round((subtotalAfterDiscounts + shippingCost) * 100) / 100);
     const amountPaise = Math.round(totalAmount * 100);
     if (amountPaise < 100) {
       throw new ClientOrderError(400, 'The order total is too low to pay online.');

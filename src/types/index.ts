@@ -42,6 +42,7 @@ export interface Product {
   badge?: string;
   status?: 'active' | 'draft' | 'archived';
   isImported?: boolean;
+  weight?: number; // weight in grams
   createdAt?: string;
   updatedAt?: string;
 }

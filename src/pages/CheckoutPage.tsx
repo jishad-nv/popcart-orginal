@@ -15,7 +15,9 @@ import {
   Banknote,
   UserCheck,
   MapPin,
+  AlertTriangle,
 } from 'lucide-react';
+import { formatWeightDisplay } from '../config/shipping';
 
 async function parseApiResponse(res: Response) {
   const text = await res.text();
@@ -39,8 +41,11 @@ export const CheckoutPage: React.FC = () => {
     cart,
     cartSubtotal,
     cartDiscount,
+    cartBaseShipping,
+    cartShippingDiscount,
     cartShipping,
-    cartTax,
+    cartTotalWeight,
+    isCartOverWeightLimit,
     appliedCoupon,
     formatPrice,
     currentUser,
@@ -146,6 +151,13 @@ export const CheckoutPage: React.FC = () => {
 
     // Prevent duplicate submissions from rapid double-clicks
     if (isSubmittingRef.current || isProcessing) {
+      return;
+    }
+
+    if (isCartOverWeightLimit || cartTotalWeight > 10000) {
+      const formatted = formatWeightDisplay(cartTotalWeight);
+      addToast('Order Weight Limit Exceeded', `Your cart weighs ${formatted}, which exceeds the 10 kg limit. Please reduce item quantities.`, 'error');
+      setCheckoutError(`Your order weighs ${formatted}, which exceeds our maximum order limit of 10 kg. Please reduce item quantities in cart to proceed.`);
       return;
     }
 
@@ -426,10 +438,12 @@ export const CheckoutPage: React.FC = () => {
                 {completedOrder.shippingCost === 0 ? 'FREE' : formatPrice(completedOrder.shippingCost)}
               </span>
             </div>
-            <div className="flex justify-between">
-              <span>Tax (GST)</span>
-              <span className="tabular-nums font-semibold text-slate-800">{formatPrice(completedOrder.tax)}</span>
-            </div>
+            {completedOrder.tax > 0 && (
+              <div className="flex justify-between">
+                <span>Tax (GST)</span>
+                <span className="tabular-nums font-semibold text-slate-800">{formatPrice(completedOrder.tax)}</span>
+              </div>
+            )}
             <div className="border-t border-slate-200 pt-2 flex justify-between text-base font-extrabold text-slate-900">
               <span>Total Paid</span>
               <span className="text-violet-700 tabular-nums">{formatPrice(completedOrder.totalAmount)}</span>
@@ -457,8 +471,10 @@ export const CheckoutPage: React.FC = () => {
   }
 
   // MAIN CHECKOUT FORM
+  const subtotalAfterDiscounts = Math.max(0, cartSubtotal - cartDiscount);
   const calculatedShipping = cartShipping;
-  const calculatedTotal = Math.max(0, cartSubtotal - cartDiscount + calculatedShipping + cartTax);
+  // Final Total = Product Subtotal + Final Shipping Charge
+  const calculatedTotal = Math.max(0, subtotalAfterDiscounts + calculatedShipping);
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-8">
@@ -470,6 +486,21 @@ export const CheckoutPage: React.FC = () => {
           Complete your delivery details and choose your preferred payment method.
         </p>
       </div>
+
+      {/* Weight Limit Warning Banner */}
+      {isCartOverWeightLimit && (
+        <div className="p-4 sm:p-5 rounded-3xl bg-rose-50 border border-rose-200 flex items-center gap-3.5">
+          <div className="w-10 h-10 rounded-2xl bg-rose-100 text-rose-700 flex items-center justify-center shrink-0">
+            <AlertTriangle className="w-5 h-5" />
+          </div>
+          <div className="text-xs">
+            <h3 className="text-sm font-bold text-rose-900">Order Weight Limit Exceeded (Maximum 10 kg)</h3>
+            <p className="text-rose-700 mt-0.5">
+              Your order total weight is <strong>{formatWeightDisplay(cartTotalWeight)}</strong>. Our courier limit is <strong>10 kg</strong> per order. Please reduce item quantities in your cart before placing this order.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Sign-In Notice Banner if Customer is Not Logged In */}
       {!currentUser && (
@@ -609,11 +640,20 @@ export const CheckoutPage: React.FC = () => {
                   className="mt-0.5 accent-violet-600"
                 />
                 <div>
-                  <span className="font-bold text-slate-900 block">Standard Ground Delivery</span>
-                  <span className="text-slate-500 text-[11px] block mt-0.5">Delivered in 5-10 business days after dispatch</span>
-                  <span className="font-bold text-emerald-600 text-xs mt-1 block">
-                    {cartShipping === 0 ? 'FREE' : formatPrice(cartShipping)}
+                  <span className="font-bold text-slate-900 block">Weight-Based Express Ground Delivery</span>
+                  <span className="text-slate-500 text-[11px] block mt-0.5">
+                    Delivered in 5-10 business days after dispatch ({formatWeightDisplay(cartTotalWeight)})
                   </span>
+                  <div className="mt-1 flex items-center gap-2">
+                    <span className="font-bold text-emerald-600 text-xs">
+                      {cartShipping === 0 ? 'FREE' : formatPrice(cartShipping)}
+                    </span>
+                    {cartShippingDiscount > 0 && (
+                      <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-semibold">
+                        ₹50 Shipping Discount Applied
+                      </span>
+                    )}
+                  </div>
                 </div>
               </label>
             </div>
@@ -692,14 +732,26 @@ export const CheckoutPage: React.FC = () => {
                 </div>
               )}
               <div className="flex justify-between">
-                <span>Shipping (Standard)</span>
-                <span className="font-semibold text-slate-900 tabular-nums">
-                  {calculatedShipping === 0 ? <span className="text-emerald-600">FREE</span> : formatPrice(calculatedShipping)}
+                <span>Total Cart Weight</span>
+                <span className={`font-semibold tabular-nums ${isCartOverWeightLimit ? 'text-rose-600 font-bold' : 'text-slate-900'}`}>
+                  {formatWeightDisplay(cartTotalWeight)}
                 </span>
               </div>
               <div className="flex justify-between">
-                <span>Tax (GST)</span>
-                <span className="font-semibold text-slate-900 tabular-nums">{formatPrice(cartTax)}</span>
+                <span>Weight-Based Shipping</span>
+                <span className="font-semibold text-slate-900 tabular-nums">{formatPrice(cartBaseShipping)}</span>
+              </div>
+              {cartShippingDiscount > 0 && (
+                <div className="flex justify-between text-emerald-600 font-medium">
+                  <span>Shipping Discount (Orders &gt; ₹500)</span>
+                  <span className="font-semibold tabular-nums">-{formatPrice(cartShippingDiscount)}</span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span>Final Shipping</span>
+                <span className="font-semibold text-slate-900 tabular-nums">
+                  {calculatedShipping === 0 ? <span className="text-emerald-600 font-bold">FREE</span> : formatPrice(calculatedShipping)}
+                </span>
               </div>
               <div className="border-t border-slate-200 pt-2 flex justify-between text-base font-extrabold text-slate-900">
                 <span>Grand Total</span>
@@ -717,17 +769,32 @@ export const CheckoutPage: React.FC = () => {
               </div>
             )}
 
+            {isCartOverWeightLimit && (
+              <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-900 space-y-1">
+                <p className="font-bold">Maximum Order Weight Limit Exceeded (10 kg max)</p>
+                <p className="text-[11px] text-rose-800 leading-relaxed">
+                  Your cart currently weighs {formatWeightDisplay(cartTotalWeight)}. Please return to the cart and reduce item quantities to proceed.
+                </p>
+              </div>
+            )}
+
             {/* Submit Button */}
             <button
               type="submit"
-              disabled={isProcessing}
-              className="w-full py-4 px-6 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700 disabled:opacity-50 text-white text-sm font-bold rounded-xl shadow-lg shadow-violet-500/25 flex items-center justify-center gap-2 transition-all cursor-pointer"
+              disabled={isProcessing || isCartOverWeightLimit}
+              className={`w-full py-4 px-6 ${
+                isCartOverWeightLimit
+                  ? 'bg-slate-300 text-slate-500 cursor-not-allowed shadow-none'
+                  : 'bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700 text-white shadow-lg shadow-violet-500/25 cursor-pointer'
+              } disabled:opacity-50 text-sm font-bold rounded-xl flex items-center justify-center gap-2 transition-all`}
             >
               {isProcessing ? (
                 <>
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                   <span>Opening secure payment...</span>
                 </>
+              ) : isCartOverWeightLimit ? (
+                <span>Order Exceeds 10 kg Limit (Cannot Proceed)</span>
               ) : (
                 <>
                   <Lock className="w-4 h-4" />

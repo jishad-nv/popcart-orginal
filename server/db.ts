@@ -79,8 +79,8 @@ const getDefaultSeed = (): DatabaseSchema => {
       tagline: 'TRENDING PRODUCTS · BETTER LIVING',
       currency: 'INR',
       currencyRate: 83.5,
-      freeShippingThreshold: 1999,
-      standardShippingFee: 99,
+      freeShippingThreshold: 1000,
+      standardShippingFee: 35,
       taxRate: 0.12,
       announcementBar: {
         enabled: true,

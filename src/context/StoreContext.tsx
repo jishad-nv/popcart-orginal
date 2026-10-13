@@ -43,6 +43,7 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
+import { calculateBaseShipping, calculateShippingDiscount, MAX_ORDER_WEIGHT_GRAMS } from '../config/shipping';
 
 // Initialize Firebase App, Firestore (using firestoreDatabaseId from firebase-applet-config.json), and Auth
 const app = initializeApp(firebaseConfig);
@@ -170,8 +171,13 @@ interface StoreContextType {
   removeFromCart: (productId: string, color?: string) => void;
   clearCart: () => void;
   cartCount: number;
+  cartTotalWeight: number;
+  isCartOverWeightLimit: boolean;
+  maxOrderWeightGrams: number;
   cartSubtotal: number;
   cartDiscount: number;
+  cartBaseShipping: number;
+  cartShippingDiscount: number;
   cartShipping: number;
   cartTax: number;
   cartTotal: number;
@@ -1251,22 +1257,60 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return Math.min(appliedCoupon.discountValue, cartSubtotal);
   }, [cartSubtotal, appliedCoupon]);
 
-  const cartShipping = useMemo(() => {
-    if (cartSubtotal === 0) return 0;
-    if (cartSubtotal >= settings.freeShippingThreshold) return 0;
-    return settings.standardShippingFee;
-  }, [cartSubtotal, settings]);
+  const cartTotalWeight = useMemo(() => {
+    return cart.reduce((total, item) => {
+      const w = Number.isFinite(Number(item.product.weight)) && Number(item.product.weight) > 0 ? Number(item.product.weight) : 500;
+      return total + w * item.quantity;
+    }, 0);
+  }, [cart]);
 
+  const isCartOverWeightLimit = useMemo(() => {
+    return cartTotalWeight > MAX_ORDER_WEIGHT_GRAMS;
+  }, [cartTotalWeight]);
+
+  const maxOrderWeightGrams = MAX_ORDER_WEIGHT_GRAMS;
+
+  // New Weight-Based Shipping Charges:
+  // - 0 KG to 1 KG (0 - 1000g): ₹49
+  // - Above 1 KG to 2 KG (1001 - 2000g): ₹99
+  // - Above 2 KG to 3 KG (2001 - 3000g): ₹119 (IMPORTANT: ₹119, NOT ₹109)
+  // - Above 3 KG to 4 KG (3001 - 4000g): ₹129
+  // - Above 4 KG to 5 KG (4001 - 5000g): ₹149
+  // - Above 5 KG to 10 KG (5001 - 10000g): ₹249
+  const cartBaseShipping = useMemo(() => {
+    if (cartSubtotal === 0 || cartTotalWeight === 0) return 0;
+    return calculateBaseShipping(cartTotalWeight);
+  }, [cartSubtotal, cartTotalWeight]);
+
+  // Automatic Shipping Offers Priority:
+  // 1. Calculate subtotal after applicable product discounts: Math.max(0, cartSubtotal - cartDiscount)
+  // 2. Combined weight of all products: cartTotalWeight
+  // 3. Original weight-based shipping: cartBaseShipping
+  // 4. Offer rules:
+  //    - Free delivery completely removed. Free delivery must not be offered automatically under any circumstances.
+  //    - If subtotal > ₹500, apply ₹50 shipping discount (never negative).
+  //    - If subtotal <= ₹500, no shipping discount.
+  const cartShippingDiscount = useMemo(() => {
+    if (cartBaseShipping === 0) return 0;
+    const netSubtotal = Math.max(0, cartSubtotal - cartDiscount);
+    return calculateShippingDiscount(cartBaseShipping, netSubtotal);
+  }, [cartBaseShipping, cartSubtotal, cartDiscount]);
+
+  const cartShipping = useMemo(() => {
+    return Math.max(0, cartBaseShipping - cartShippingDiscount);
+  }, [cartBaseShipping, cartShippingDiscount]);
+
+  // Separate optional GST charge removed.
+  // Final Total = Product Subtotal (after discounts) + Final Shipping Charge
   const cartTax = useMemo(() => {
-    if (cartSubtotal === 0) return 0;
-    const taxableAmount = Math.max(0, cartSubtotal - cartDiscount);
-    return Math.round(taxableAmount * settings.taxRate);
-  }, [cartSubtotal, cartDiscount, settings.taxRate]);
+    return 0;
+  }, []);
 
   const cartTotal = useMemo(() => {
     if (cartSubtotal === 0) return 0;
-    return Math.max(0, cartSubtotal - cartDiscount + cartShipping + cartTax);
-  }, [cartSubtotal, cartDiscount, cartShipping, cartTax]);
+    const subtotal = Math.max(0, cartSubtotal - cartDiscount);
+    return Math.max(0, subtotal + cartShipping);
+  }, [cartSubtotal, cartDiscount, cartShipping]);
 
   // Wishlist
   const toggleWishlist = (productId: string) => {
@@ -1549,6 +1593,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     const orderNumber = `ORD-${Math.floor(100000 + Math.random() * 900000)}`;
+
+    if (cartTotalWeight > MAX_ORDER_WEIGHT_GRAMS) {
+      throw new Error(`Your order weight (${(cartTotalWeight / 1000).toFixed(2)} kg) exceeds the maximum allowed limit of 10 kg. Please reduce item quantities.`);
+    }
+
     const shippingFee = cartShipping;
     const nowIso = new Date().toISOString();
 
@@ -1603,8 +1652,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       subtotal: cartSubtotal,
       discountAmount: cartDiscount,
       couponCode: appliedCoupon?.code || '',
-      tax: cartTax,
-      totalAmount: Math.max(0, cartSubtotal - cartDiscount + shippingFee + cartTax),
+      tax: 0,
+      totalAmount: Math.max(0, cartSubtotal - cartDiscount + shippingFee),
       paymentMethod: orderData.paymentMethod,
       paymentStatus,
       orderStatus: 'placed',
@@ -1853,8 +1902,13 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         removeFromCart,
         clearCart,
         cartCount,
+        cartTotalWeight,
+        isCartOverWeightLimit,
+        maxOrderWeightGrams,
         cartSubtotal,
         cartDiscount,
+        cartBaseShipping,
+        cartShippingDiscount,
         cartShipping,
         cartTax,
         cartTotal,

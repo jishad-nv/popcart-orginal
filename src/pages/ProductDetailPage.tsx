@@ -335,7 +335,7 @@ export const ProductDetailPage: React.FC = () => {
                 <Truck className="w-4 h-4" />
               </div>
               <div>
-                <strong className="block text-slate-900 font-bold">Free Shipping</strong>
+                <strong className="block text-slate-900 font-bold">Express Delivery</strong>
                 <span className="text-[11px] text-slate-500">Fast delivery in 2-4 days</span>
               </div>
             </div>

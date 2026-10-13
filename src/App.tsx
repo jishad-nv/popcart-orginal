@@ -13,6 +13,7 @@ import { CartDrawer } from './components/common/CartDrawer';
 import { QuickViewModal } from './components/common/QuickViewModal';
 import { AuthModal } from './components/common/AuthModal';
 import { ToastContainer } from './components/common/ToastContainer';
+import { WhatsAppButton } from './components/common/WhatsAppButton';
 
 // Pages
 import { HomePage } from './pages/HomePage';
@@ -67,7 +68,8 @@ const MainRouter: React.FC = () => {
       </main>
       <Footer />
 
-      {/* Global Modals & Navigation Drawers */}
+      {/* Global Floating Actions, Modals & Navigation Drawers */}
+      <WhatsAppButton />
       <MobileBottomNav />
       <SearchModal />
       <CartDrawer />

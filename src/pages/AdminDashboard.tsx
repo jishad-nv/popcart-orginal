@@ -98,6 +98,7 @@ export const AdminDashboard: React.FC = () => {
     isNewArrival: false,
     specifications: {} as Record<string, string>,
     variants: [] as ProductVariant[],
+    weight: 500,
   });
 
   const [newImageUrl, setNewImageUrl] = useState('');
@@ -360,6 +361,7 @@ export const AdminDashboard: React.FC = () => {
         Quality: 'Popcarty Verified',
       },
       variants: [],
+      weight: 500,
     });
     setNewImageUrl('');
     setIsProductModalOpen(true);
@@ -392,6 +394,7 @@ export const AdminDashboard: React.FC = () => {
       isNewArrival: !!prod.isNewArrival,
       specifications: prod.specifications ? { ...prod.specifications } : {},
       variants: prod.variants ? [...prod.variants] : [],
+      weight: prod.weight || 500,
     });
     setNewImageUrl('');
     setIsProductModalOpen(true);
@@ -2071,24 +2074,20 @@ export const AdminDashboard: React.FC = () => {
               />
             </div>
 
-            <div>
-              <label className="font-semibold text-slate-700 block mb-1">Free Shipping Threshold</label>
-              <input
-                type="number"
-                value={settings.freeShippingThreshold}
-                onChange={(e) => updateSettings({ freeShippingThreshold: Number(e.target.value) })}
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl"
-              />
-            </div>
-
-            <div>
-              <label className="font-semibold text-slate-700 block mb-1">Standard Shipping Fee</label>
-              <input
-                type="number"
-                value={settings.standardShippingFee}
-                onChange={(e) => updateSettings({ standardShippingFee: Number(e.target.value) })}
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl"
-              />
+            <div className="md:col-span-2 p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs space-y-2">
+              <strong className="block text-slate-900 font-bold">Active Weight-Based Shipping System (Automatic)</strong>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-[11px] text-slate-600">
+                <div className="p-2 bg-white rounded-xl border border-slate-200/80">0 – 1 KG: <strong>₹49</strong></div>
+                <div className="p-2 bg-white rounded-xl border border-slate-200/80">1 – 2 KG: <strong>₹99</strong></div>
+                <div className="p-2 bg-white rounded-xl border border-slate-200/80">2 – 3 KG: <strong>₹119</strong></div>
+                <div className="p-2 bg-white rounded-xl border border-slate-200/80">3 – 4 KG: <strong>₹129</strong></div>
+                <div className="p-2 bg-white rounded-xl border border-slate-200/80">4 – 5 KG: <strong>₹149</strong></div>
+                <div className="p-2 bg-white rounded-xl border border-slate-200/80">5 – 10 KG: <strong>₹249</strong></div>
+              </div>
+              <p className="text-[11px] text-slate-500 pt-1">
+                • <strong>Max Order Weight:</strong> 10 KG (checkout blocked if exceeded)<br />
+                • <strong>Shipping Discount:</strong> ₹50 OFF on orders with subtotal &gt; ₹500 (Free delivery is disabled)
+              </p>
             </div>
 
             <div className="md:col-span-2">
@@ -2486,12 +2485,14 @@ export const AdminDashboard: React.FC = () => {
                       </span>
                     </div>
                   )}
-                  <div className="flex justify-between text-slate-600">
-                    <span>Tax (GST)</span>
-                    <span className="font-semibold tabular-nums">
-                      {formatPrice(selectedOrderForModal.tax)}
-                    </span>
-                  </div>
+                  {selectedOrderForModal.tax > 0 && (
+                    <div className="flex justify-between text-slate-600">
+                      <span>Tax (GST)</span>
+                      <span className="font-semibold tabular-nums">
+                        {formatPrice(selectedOrderForModal.tax)}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="pt-3 border-t border-slate-200 flex justify-between items-baseline">
@@ -2594,7 +2595,7 @@ export const AdminDashboard: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
                   <div>
                     <label className="font-bold text-slate-700 block mb-1">Store SKU</label>
                     <input
@@ -2617,7 +2618,7 @@ export const AdminDashboard: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="font-bold text-slate-700 block mb-1">Stock Quantity</label>
+                    <label className="font-bold text-slate-700 block mb-1">Stock Qty</label>
                     <input
                       type="number"
                       required
@@ -2629,14 +2630,27 @@ export const AdminDashboard: React.FC = () => {
                   </div>
 
                   <div>
+                    <label className="font-bold text-slate-700 block mb-1">Weight (g)</label>
+                    <input
+                      type="number"
+                      required
+                      min={1}
+                      value={productForm.weight}
+                      onChange={(e) => setProductForm({ ...productForm, weight: Number(e.target.value) })}
+                      placeholder="e.g. 500"
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono"
+                    />
+                  </div>
+
+                  <div>
                     <label className="font-bold text-slate-700 block mb-1">Status</label>
                     <select
                       value={productForm.status}
                       onChange={(e) => setProductForm({ ...productForm, status: e.target.value as any })}
                       className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold"
                     >
-                      <option value="active">Active (Visible)</option>
-                      <option value="draft">Draft (Hidden)</option>
+                      <option value="active">Active</option>
+                      <option value="draft">Draft</option>
                       <option value="archived">Archived</option>
                     </select>
                   </div>

@@ -8,6 +8,7 @@ import {
   FileText,
   Mail,
   Phone,
+  MessageCircle,
   MapPin,
   ChevronDown,
   CheckCircle2,
@@ -124,6 +125,21 @@ export const InfoPages: React.FC = () => {
                   <div>
                     <strong className="block text-white">Toll-Free Phone</strong>
                     <span className="text-slate-300">+91 (800) 987-6543 (9 AM - 9 PM)</span>
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-3">
+                  <MessageCircle className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="block text-white">WhatsApp Support</strong>
+                    <a
+                      href="https://wa.me/919847905548?text=Hello%20Popcarty!%20I%20have%20a%20question%20about%20your%20products.%20Could%20you%20please%20help%20me%3F"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-emerald-400 hover:underline"
+                    >
+                      +91 98479 05548 (Instant Chat)
+                    </a>
                   </div>
                 </div>
 
@@ -269,10 +285,58 @@ export const InfoPages: React.FC = () => {
           <p>
             Orders are typically processed within 1-3 business days and are delivered in approximately 5-7 business days after dispatch. Once your order has shipped, tracking information will be shared with you to monitor the delivery.
           </p>
-          <h3 className="text-sm font-bold text-slate-900 pt-2">2. Free Shipping Eligibility</h3>
+          <h3 className="text-sm font-bold text-slate-900 pt-2">2. New Weight-Based Shipping Rates</h3>
           <p>
-            All orders with an item total exceeding <strong>{settings.currency === 'INR' ? '₹1,999' : '$50'}</strong> qualify for complimentary Standard Shipping.
+            Standard delivery charges are strictly calculated according to total packaged weight:
           </p>
+          <div className="overflow-x-auto my-3">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="bg-slate-100 text-slate-700">
+                  <th className="p-2.5 border border-slate-200 font-bold">Weight Range</th>
+                  <th className="p-2.5 border border-slate-200 font-bold">Shipping Rate</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200">
+                <tr>
+                  <td className="p-2.5 border border-slate-200">0 KG to 1 KG (up to 1,000 g)</td>
+                  <td className="p-2.5 border border-slate-200 font-bold text-slate-900">₹49</td>
+                </tr>
+                <tr>
+                  <td className="p-2.5 border border-slate-200">Above 1 KG to 2 KG (1,001 g – 2,000 g)</td>
+                  <td className="p-2.5 border border-slate-200 font-bold text-slate-900">₹99</td>
+                </tr>
+                <tr>
+                  <td className="p-2.5 border border-slate-200">Above 2 KG to 3 KG (2,001 g – 3,000 g)</td>
+                  <td className="p-2.5 border border-slate-200 font-bold text-slate-900">₹119</td>
+                </tr>
+                <tr>
+                  <td className="p-2.5 border border-slate-200">Above 3 KG to 4 KG (3,001 g – 4,000 g)</td>
+                  <td className="p-2.5 border border-slate-200 font-bold text-slate-900">₹129</td>
+                </tr>
+                <tr>
+                  <td className="p-2.5 border border-slate-200">Above 4 KG to 5 KG (4,001 g – 5,000 g)</td>
+                  <td className="p-2.5 border border-slate-200 font-bold text-slate-900">₹149</td>
+                </tr>
+                <tr>
+                  <td className="p-2.5 border border-slate-200">Above 5 KG to 10 KG (5,001 g – 10,000 g)</td>
+                  <td className="p-2.5 border border-slate-200 font-bold text-slate-900">₹249</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3 className="text-sm font-bold text-slate-900 pt-2">3. Maximum Order Weight Limit</h3>
+          <p>
+            The maximum weight for a single order is <strong>10 KG (10,000 grams)</strong>. Orders exceeding 10 KG cannot be processed online. Customers requiring bulk shipments should contact support.
+          </p>
+
+          <h3 className="text-sm font-bold text-slate-900 pt-2">4. Automatic Shipping Discount</h3>
+          <ul className="list-disc pl-5 space-y-1 mt-2">
+            <li><strong>₹50 Shipping Discount:</strong> Orders with a product subtotal greater than <strong>₹500</strong> automatically receive a <strong>₹50 discount</strong> applied to the calculated weight-based shipping fee.</li>
+            <li><strong>Orders of ₹500 or less:</strong> Charged at the standard weight-based shipping rate without discount.</li>
+            <li><strong>Free Delivery Policy:</strong> Automatic free shipping has been removed; all shipments are calculated transparently by weight with applicable discounts.</li>
+          </ul>
         </div>
       )}
 

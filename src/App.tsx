@@ -5,6 +5,7 @@
 
 import React from 'react';
 import { StoreProvider, useStore } from './context/StoreContext';
+import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { Header } from './components/common/Header';
 import { Footer } from './components/common/Footer';
 import { MobileBottomNav } from './components/common/MobileBottomNav';
@@ -83,7 +84,10 @@ const MainRouter: React.FC = () => {
 export default function App() {
   return (
     <StoreProvider>
-      <MainRouter />
+      <ErrorBoundary>
+        <MainRouter />
+      </ErrorBoundary>
     </StoreProvider>
   );
 }
+

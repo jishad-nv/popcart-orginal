@@ -107,7 +107,6 @@ export const ProductRestorePanel: React.FC = () => {
   // B. Re-price every product already in Firestore from its cost price
   const handleApplyMargin = async () => {
     if (!validMargin) return;
-    if (!window.confirm(`Set the selling price of ALL products to cost + ${margin}% ?`)) return;
 
     setBusy(true);
     setError('');
@@ -141,7 +140,6 @@ export const ProductRestorePanel: React.FC = () => {
 
   // C. Re-assign every product to the new category list
   const handleRecategorize = async () => {
-    if (!window.confirm('Re-assign the category of ALL products using the new category list?')) return;
 
     setBusy(true);
     setError('');

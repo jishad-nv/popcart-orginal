@@ -24,10 +24,8 @@ import {
   INITIAL_REVIEWS,
 } from '../data/mockData';
 import { AUTH_TOKEN_KEY, clearStoredAuthToken } from '../services/productImporter';
-import { initializeApp } from 'firebase/app';
-import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, createUserWithEmailAndPassword } from 'firebase/auth';
+import { onAuthStateChanged, signInWithEmailAndPassword, signOut, createUserWithEmailAndPassword } from 'firebase/auth';
 import {
-  getFirestore,
   collection,
   getDocs,
   getDocsFromCache,
@@ -41,14 +39,11 @@ import {
   query,
   where,
   writeBatch,
+  getCountFromServer,
 } from 'firebase/firestore';
-import firebaseConfig from '../../firebase-applet-config.json';
+import { app, db, auth } from '../services/firebase';
+import { getProductsFromStorage, saveProductsToStorage } from '../services/productStorage';
 import { calculateBaseShipping, calculateShippingDiscount, MAX_ORDER_WEIGHT_GRAMS } from '../config/shipping';
-
-// Initialize Firebase App, Firestore (using firestoreDatabaseId from firebase-applet-config.json), and Auth
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-const auth = getAuth(app);
 
 enum OperationType {
   CREATE = 'create',
@@ -439,11 +434,12 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
-  // State initialization
-  const [products, setProducts] = useState<Product[]>(() => {
-    const loaded = loadStorage<Product[]>(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
-    return Array.isArray(loaded) && loaded.length > 0 ? loaded : INITIAL_PRODUCTS;
-  });
+  // State initialization: clean legacy truncated localStorage cache so it never overrides full catalog
+  try {
+    localStorage.removeItem(STORAGE_KEYS.PRODUCTS);
+  } catch {}
+
+  const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
   const [categories, setCategories] = useState<Category[]>(() => loadStorage(STORAGE_KEYS.CATEGORIES, INITIAL_CATEGORIES));
   const [cart, setCart] = useState<CartItem[]>(() => loadStorage(STORAGE_KEYS.CART, []));
   const [wishlistIds, setWishlistIds] = useState<string[]>(() => loadStorage(STORAGE_KEYS.WISHLIST, []));
@@ -515,36 +511,29 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const loadFirestoreProducts = async () => {
       const productsCol = collection(db, 'products');
-      const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
-      const lastSync = Number(localStorage.getItem(STORAGE_KEYS.PRODUCTS_SYNC_AT) || 0);
-
-      // 1. First try reading from persistent IndexedDB Firestore cache (0 daily read quota consumed)
+      // 1. Immediately hydrate untruncated catalog from IndexedDB for instant display
       try {
-        const cachedSnap = await getDocsFromCache(productsCol);
-        if (!cachedSnap.empty) {
-          const cachedProds: Product[] = [];
-          cachedSnap.forEach((docSnap) => {
-            cachedProds.push(docSnap.data() as Product);
-          });
-          if (cachedProds.length > 0) {
-            setProducts(cachedProds);
-            if (Date.now() - lastSync < SIX_HOURS_MS) {
-              return;
-            }
-          }
+        const localCached = await getProductsFromStorage();
+        if (localCached && localCached.length > 0) {
+          setProducts(localCached);
         }
-      } catch {
-        // Cache miss or unavailable; check localStorage sync timestamp next
+      } catch (err) {
+        console.warn('Error reading local IndexedDB cache:', err);
       }
 
-      // If localStorage already holds synced products from within the last 6 hours, avoid re-reading the entire collection on every page refresh
-      const localCached = loadStorage<Product[]>(STORAGE_KEYS.PRODUCTS, []);
-      if (Array.isArray(localCached) && localCached.length > 0 && Date.now() - lastSync < SIX_HOURS_MS) {
-        return;
-      }
-
-      // 2. Fetch from Firestore server if cache was empty or stale
+      // 2. Efficiently check total document count in Firestore using aggregation
       try {
+        const countSnap = await getCountFromServer(productsCol).catch(() => null);
+        const serverDocCount = countSnap ? countSnap.data().count : 0;
+        const currentLocal = await getProductsFromStorage();
+
+        // If local IndexedDB already holds the entire catalog matching Firestore, keep it loaded
+        if (serverDocCount > 0 && currentLocal && currentLocal.length >= serverDocCount) {
+          setProducts(currentLocal);
+          return;
+        }
+
+        // 3. Fetch full product catalog from Firestore and save all to IndexedDB
         const querySnapshot = await getDocs(productsCol);
         if (!querySnapshot.empty) {
           const prods: Product[] = [];
@@ -553,9 +542,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           });
           if (prods.length > 0) {
             setProducts(prods);
-            try {
-              localStorage.setItem(STORAGE_KEYS.PRODUCTS_SYNC_AT, String(Date.now()));
-            } catch {}
+            await saveProductsToStorage(prods);
           }
         } else {
           setProducts((prev) => (prev.length > 0 ? prev : INITIAL_PRODUCTS));
@@ -700,9 +687,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  // Sync to local storage on changes
+  // Sync to persistent IndexedDB storage on changes (keeps entire 3,000+ product catalog intact)
   useEffect(() => {
-    safeSetStorage(STORAGE_KEYS.PRODUCTS, products.slice(0, 100));
+    if (products.length > 0) {
+      saveProductsToStorage(products);
+    }
   }, [products]);
 
   useEffect(() => {
@@ -1119,6 +1108,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           importedCount++;
         }
       });
+      saveProductsToStorage(updated).catch(() => {});
       return updated;
     });
 

@@ -2,6 +2,7 @@ import { ImportPreviewProduct, ImportStats, ImportErrorItem, Product, ProductVar
 import { classifyProduct, getCategoryName } from './categoryMapper';
 import { auth, db } from './firebase';
 import { doc, writeBatch, collection, getDocs, getCountFromServer } from 'firebase/firestore';
+import { saveProductsToStorage } from './productStorage';
 
 export interface MarkupRule {
   type: 'percent' | 'fixed' | 'none';
@@ -455,6 +456,9 @@ export const commitImportToBackend = async (
       onBatchProgress(Math.min(i + chunkSize, products.length), products.length);
     }
   }
+
+  const allStoreProducts = products.map((preview) => convertToStoreProduct(preview));
+  await saveProductsToStorage(allStoreProducts).catch(() => {});
 
   const savedCountFromDb = await getFirestoreProductCount();
 
